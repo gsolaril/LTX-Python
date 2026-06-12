@@ -1,5 +1,6 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 import os, sys, json, subprocess
+from getpass import getpass
 from typing import Any
 from pathlib import Path
 from configparser import ConfigParser
@@ -13,6 +14,7 @@ _FOLDER_UTILS = Path(__file__).parent
 _FOLDER_ROOT = _FOLDER_UTILS.parent.parent
 _FOLDER_LOG = _FOLDER_ROOT / "logs"
 _FOLDER_SRC = _FOLDER_ROOT / "src"
+STARTUP_ERRORS = list()
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class Config(NamedTuple):
@@ -27,13 +29,29 @@ class Config(NamedTuple):
         [f"{K}: {V}" for K, V in self._asdict().items()])
 
 _PATH_CONFIG = _FOLDER_ROOT / "config.json"
-with open(_PATH_CONFIG, "r") as file:
-    Config = Config(**json.load(file))
+try:
+    with open(_PATH_CONFIG, "r") as file:
+        Config = Config(**json.load(file))
+except Exception as EXC:
+    Config = Config()
+    verbose = f"Error reading \"{_PATH_CONFIG}\":"
+    verbose += f"\n => ({EXC.__class__.__name__}) {EXC}"
+    verbose += f"\n => Will use default config."
+    STARTUP_ERRORS.append(verbose)
 
 AUTH = ConfigParser()
 AUTH.read(_FOLDER_ROOT / "auth.ini")
 AUTH = {key: dict[str, str](value)\
     for key, value in AUTH.items()}
+try:
+    if not os.path.exists(_FOLDER_ROOT / "auth.ini"):
+        error = f"\"auth.ini\" not found in \"{_FOLDER_ROOT}\""
+        raise FileNotFoundError(error)
+except Exception as EXC:
+    verbose = f"Error reading \"{_FOLDER_ROOT / "auth.ini"}\":"
+    verbose += f"\n => ({EXC.__class__.__name__}) {EXC}"
+    verbose += f"\n => Will use default auth, including Vault password."
+    STARTUP_ERRORS.append(verbose)
 
 _proc = Popen(["docker", "ps", "--format", "{{json .}}"],
         stdout = subprocess.PIPE, stderr = subprocess.PIPE,
@@ -49,8 +67,8 @@ for line in _out.strip().split("\n"):
     name = container.pop("Names")
     state = container.get("State")
     if (state != "running"):
-        if (name != "vault"): continue
-        raise RuntimeError(f"Vault state: \"{state}\"!")
+        if (name == "vault"): raise RuntimeError(f"Vault state: \"{state}\"!")
+        STARTUP_ERRORS.append(f"Warning: \"{name}\" state: \"{state}\"...")
         
     DOCKER[name] = {"state": state, "ports": []}
     for port in str.split(container["Ports"], ","):
@@ -77,7 +95,7 @@ class CredentialsV1(NamedTuple):
                     src = src, attr = "username", ref = "..."))
         if not (password := data.pop("password", None)):
             if not (password := defs.get("password", None)):
-                password = input(verbose.format(
+                password = getpass(verbose.format(
                     src = src, attr = "password", ref = username))
         if not (ip := data.pop("ip", None)):
             if not (ip := defs.get("ip", None)):
@@ -88,7 +106,7 @@ class CredentialsV1(NamedTuple):
 DEFAULT_HOST, _DEFAULT_PORT = "localhost", DOCKER["vault"]["ports"][0]
 _defs = {"username": Config.USER, "ip": f"{DEFAULT_HOST}:{_DEFAULT_PORT}"}
 _credentials = CredentialsV1.from_kv(src = "Vault",
-        data = AUTH["VAULT"], defs = _defs)
+        data = AUTH.get("VAULT", {}), defs = _defs)
 
 Vault = VaultClient(url = "http://" + _credentials.IP)
 Vault.auth.userpass.login(username = _credentials.USERNAME,

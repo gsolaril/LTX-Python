@@ -8,6 +8,8 @@ from sqlalchemy import create_engine, Engine, TextClause
 from redis.asyncio import Redis as RedisClient
 from base import AUTH, DOCKER, DEFAULT_HOST
 from base import Config, Credentials, Vault
+from base import STARTUP_ERRORS
+
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 Log.remove(0)
@@ -36,6 +38,7 @@ if Config.LOG_TO_LDB and ("grafana" in DOCKER):
     Log.add(**args, sink = sink, format = LokiClient.LOG_FORMAT["gui"])
     Log.info(f"Logging to Loki @ \"{_credentials.IP}\"")
 
+for error in STARTUP_ERRORS: Log.error(error)
 Log.info(f"Master config:\n => {Config!r}")
 
 #███████████████████████████████████████████████████████████████████████████████████████████
