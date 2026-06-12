@@ -132,12 +132,13 @@ dmypy.json
 # macOS metadata
 .DS_Store
 
-# Ignore the logs folder
+# Ignore logs
 logs/
 
-# Ignore the specific config file
-config.ini
+# Ignore auth file
+auth.ini
 
+# Ignore strategies
 src/strategies/*.py
 !src/strategies/__init__.py
 !src/strategies/test.py
