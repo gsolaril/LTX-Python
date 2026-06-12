@@ -1,0 +1,8 @@
+aiohttp
+bidict
+loguru
+numpy
+pandas
+py-clob-client
+tqdm
+polymarket-client==0.1.0b2
