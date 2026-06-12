@@ -1,3 +1,31 @@
 [VAULT]
 USERNAME = 
 PASSWORD = 
+
+[DB_ORM]
+TYPE = postgres
+IP = 
+USERNAME = 
+PASSWORD =
+DATABASE = 
+
+[DB_CCH]
+TYPE = redis
+IP = 
+USERNAME = 
+PASSWORD = 
+DATABASE = 
+
+[DB_TSS]
+TYPE = clickhouse
+IP =
+USERNAME = 
+PASSWORD = 
+DATABASE =
+
+[DB_LOG]
+TYPE = loki
+IP =
+USERNAME = 
+PASSWORD = 
+DATABASE =
