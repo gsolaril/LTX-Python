@@ -1,0 +1,117 @@
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+import os, sys, json, subprocess
+from typing import Any
+from pathlib import Path
+from configparser import ConfigParser
+from hvac import Client as VaultClient
+from subprocess import Popen
+from typing import NamedTuple
+
+#███████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+_FOLDER_UTILS = Path(__file__).parent
+_FOLDER_ROOT = _FOLDER_UTILS.parent.parent
+_FOLDER_LOG = _FOLDER_ROOT / "logs"
+_FOLDER_SRC = _FOLDER_ROOT / "src"
+
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class Config(NamedTuple):
+    USER: str = os.getlogin()
+    SESSION_NAME: str = __name__
+    LOG_TO_FILE: bool = True
+    LOG_TO_LDB: bool = False
+    DEBUG_MODE: bool = False
+    FOLDER_ROOT: Path = _FOLDER_ROOT
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __repr__(self): return str.join("\n => ",
+        [f"{K}: {V}" for K, V in self._asdict().items()])
+
+_PATH_CONFIG = _FOLDER_ROOT / "config.json"
+with open(_PATH_CONFIG, "r") as file:
+    Config = Config(**json.load(file))
+
+AUTH = ConfigParser()
+AUTH.read(_FOLDER_ROOT / "auth.ini")
+AUTH = {key: dict[str, str](value)\
+    for key, value in AUTH.items()}
+
+_proc = Popen(["docker", "ps", "--format", "{{json .}}"],
+        stdout = subprocess.PIPE, stderr = subprocess.PIPE,
+        universal_newlines = True)
+_out, _err = _proc.communicate()
+if (_proc.returncode != 0): raise RuntimeError(
+    f"Docker snapshot failed: \"{_err.strip()}\"")
+
+DOCKER = dict()
+for line in _out.strip().split("\n"):
+    if not line.strip(): continue
+    container: dict = json.loads(line)
+    name = container.pop("Names")
+    state = container.get("State")
+    if (state != "running"):
+        if (name != "vault"): continue
+        raise RuntimeError(f"Vault state: \"{state}\"!")
+        
+    DOCKER[name] = {"state": state, "ports": []}
+    for port in str.split(container["Ports"], ","):
+        port = port.split("->")[-1].split("/")[0]
+        DOCKER[name]["ports"].append(int(port))
+
+#███████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class CredentialsV1(NamedTuple):
+    USERNAME: str; PASSWORD: str
+    IP: str
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def from_kv(cls, data: dict, defs: dict, src: str):
+        return cls(*cls._args(data, defs, src))
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def _args(cls, data: dict, defs: dict, src: str):
+        verbose = "Type {src} {attr} for \"{ref}\": "
+        if not (username := data.pop("username", None)):
+            if not (username := defs.get("username", None)):
+                username = input(verbose.format(
+                    src = src, attr = "username", ref = "..."))
+        if not (password := data.pop("password", None)):
+            if not (password := defs.get("password", None)):
+                password = input(verbose.format(
+                    src = src, attr = "password", ref = username))
+        if not (ip := data.pop("ip", None)):
+            if not (ip := defs.get("ip", None)):
+                ip = input(verbose.format(
+                    src = src, attr = "IP", ref = username))
+        return username, password, ip
+        
+DEFAULT_HOST, _DEFAULT_PORT = "localhost", DOCKER["vault"]["ports"][0]
+_defs = {"username": Config.USER, "ip": f"{DEFAULT_HOST}:{_DEFAULT_PORT}"}
+_credentials = CredentialsV1.from_kv(src = "Vault",
+        data = AUTH["VAULT"], defs = _defs)
+
+Vault = VaultClient(url = "http://" + _credentials.IP)
+Vault.auth.userpass.login(username = _credentials.USERNAME,
+                          password = _credentials.PASSWORD)
+
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class Credentials(NamedTuple):
+    USERNAME: str; PASSWORD: str; IP: str; DATABASE: str; TYPE: str
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def from_kv(cls, data: dict, defs: dict, src: str):
+        return cls(*cls._args(data, defs, src))
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def _args(cls, data: dict, defs: dict, src: str):
+        verbose = "Type {src} {attr} for \"{ref}\": "
+        username, password, ip = CredentialsV1._args(data, defs, src)
+        if not (database := data.pop("database", None)):
+            if not (database := defs.get("database", None)):
+                database = input(verbose.format(
+                    src = src, attr = "database", ref = username))
+        if not (type := data.pop("type", None)):
+            if not (type := defs.get("type", None)):
+                type = input(verbose.format(
+                    src = src, attr = "type", ref = username))
+        return username, password, ip, database, type

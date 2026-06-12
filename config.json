@@ -1,0 +1,5 @@
+{
+    "LOG_TO_FILE": true,
+    "LOG_TO_LDB": false,
+    "DEBUG_MODE": false
+}
