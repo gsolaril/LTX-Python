@@ -13,14 +13,23 @@ from sympy import divisors
 #▄▄▄▄▄▄▄▄▄
 @dataclass
 class Symbol: # TODO: Not yet being used.
-    venue: str; symbol: str; endp_id: str
-    point_size: float; point_value: float
+    venue: str; symbol: str; quote: str; base: str
+    id: str; point_size: float; point_value: float
+    expiration: Timestamp = None
     INDEX = ["venue", "symbol"]
     _SEP = " "
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __repr__(self):
-        return str.join(self._SEP, [self.venue, self.symbol])
-
+    #▄▄▄▄▄▄▄▄▄▄
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def alias(self): return self.venue + self._SEP + self.symbol
+    def __str__(self): return self.venue + self._SEP + self.symbol
+    def __repr__(self):  return self.venue + self._SEP + self.symbol
+    def __eq__(self, other: "Symbol"): return (self.id == other.id)
+    def __ne__(self, other: "Symbol"): return (self.id != other.id)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def is_expired(self, time: Timestamp = None):
+        if (time is None): time = Timestamp.now("UTC")
+        return (time >= self.expiration)
+        
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -87,7 +96,7 @@ class TimeFrame(Enum, metaclass = Meta):
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def updatable(cls, time: Timestamp = None, mtf: "TimeFrame" = None):
         if (mtf is None): mtf = TimeFrame.MIN
-        if (time is None): time = Timestamp.utcnow()
+        if (time is None): time = Timestamp.now("UTC")
         tf_div: List[TimeFrame] = None; tf_max: TimeFrame = None
         td = time.floor(cls.S1.value) - time.floor(cls.D1.value)
         for tf_max in reversed(cls):
@@ -126,7 +135,7 @@ if (__name__ == "__main__"):
     print(" >> S1 != S2 =", TimeFrame.S1 != TimeFrame.S2)
     print(" >> S1 >= S2 =", TimeFrame.S1 >= TimeFrame.S2)
     mtf = TimeFrame.H1
-    time = Timestamp.utcnow().ceil("3h")
+    time = Timestamp.now("UTC").ceil("3h")
     print(f"Divisors for \"{time:%H:%M:%S}\" starting from \"{mtf.name}\":")
     result_iter = TimeFrame.updatable(time, mtf)
     for tf_upd, tf_opt in result_iter:
