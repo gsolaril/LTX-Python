@@ -1,14 +1,11 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import asyncio, json, hmac, hashlib
-from getpass import getpass
-from dataclasses import dataclass
+import asyncio, hmac, hashlib
+from pandas import Timestamp
 from urllib.parse import urlencode
-from asyncio import Task, create_task
-from typing import Any, List, Dict, Callable, NamedTuple
-from collections import deque, OrderedDict
-from pandas import Timestamp, Timedelta
-from aiohttp import ClientSession, ClientWebSocketResponse
-from base import ConnectorWS, DataStreamWS, to_cache
+from aiohttp import ClientSession
+from aiohttp import ClientWebSocketResponse
+from typing import Any, List, Dict, NamedTuple
+from base import ConnectorWS, DataStreamWS, cache
 from src.connectors.base import Venue
 from src.models import *
 from src.utils import *
@@ -127,7 +124,7 @@ class DataBinance(Binance, ConnectorWS):
         if not sender: return await WS.send_str("pong")
 
     #▄▄▄▄▄▄▄▄▄▄
-    @to_cache#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @cache#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_ticks(self, data: Dict):
         if (data := data.get("data", None)) is None: return
         event = data.get("e", None)
@@ -145,7 +142,7 @@ class DataBinance(Binance, ConnectorWS):
               pa = data["a"], qa = data["A"], pb = data["b"], qb = data["B"])
             
     #▄▄▄▄▄▄▄▄▄▄
-    @to_cache#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @cache#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_klines(self, data: Dict):
         if (data := data.get("data", None)) is None: return
         if (event := data.get("e", None)) is None: return

@@ -78,8 +78,8 @@ class Connector:
         self.name = self.__class__.__name__
         self._streams = dict[str, object]()
         self._specs = OrderedDict[str, Symbol]()
-        self._crons = {self.reconfig: TimeFrame.S30,
-                  self.update_specs: TimeFrame.D1}
+        self._crons = {self.reconfig: TimeFrame.S5,
+                    self.update_specs: TimeFrame.D1}
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def start_cron(self, cron: Callable, tf: TimeFrame):
@@ -168,7 +168,7 @@ class DataStream:
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def to_cache(cls, func: Callable):
+    async def cache(cls, func: Callable):
         #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         async def wrapper(*args, **kwargs):
             conn: Connector; obj: BasePoint

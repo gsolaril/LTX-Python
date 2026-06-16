@@ -1,5 +1,6 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 import asyncio, json
+from numba.core.types import NoneType
 from pandas import Timestamp
 from dataclasses import dataclass, field
 from typing import Any, Any, Callable, List
@@ -105,8 +106,8 @@ class DataStreamWS(DataStream):
                         self._subs.clear(); self._WS = None
                         if connector.active: await asyncio.sleep(2)
 
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-to_cache: Callable = DataStreamWS.to_cache
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+cache: Callable = DataStreamWS.cache
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -114,18 +115,15 @@ class ConnectorWS(Connector):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, **streams):
         super().__init__()
-        stream: DataStreamWS = None
-        class_name = self.__class__.__name__
-        for name, stream in streams.items():
-            nupd = f"{class_name}/{name}/update"
-            self._streams[nupd] = stream.update
-            nstm = f"{class_name}/{name}/stream"
-            self._streams[nstm] = stream.stream
+        stream: DataStreamWS
+        for stream in streams.values():
+            self._streams[f"{stream.name}/stream"] = stream.stream
+            self._streams[f"{stream.name}/update"] = stream.update
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def yield_update(self): ...
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_symbols(self, new: set[str], old: set[str]):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update_specs(self, new: set[str], old: set[str]):
         symbol: Symbol = None
         query_list: List[str] = list[str]()
         if not symbols: symbols = self.symbols
