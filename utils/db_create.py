@@ -113,7 +113,7 @@ data = DataFrame([{
         "name": "BinanceCoin", "url_ws": "wss://dstream.binance.com",
         "url_api": "https://dapi.binance.com/dapi/v1", "active": True,
         "maxlen": 10000, "last_written": None, "last_updated": None,
-        "symbols": {"BTCUSD": True, "ETHUSD": True, "SOLUSD": True}
+        "symbols": {"BTCUSD_PERP": True, "ETHUSD_PERP": True, "SOLUSD_PERP": True}
     }, {
         "name": "BinanceSpot", "url_ws": "wss://stream.binance.com:9443",
         "url_api": "https://api.binance.com/api/v3", "active": True,

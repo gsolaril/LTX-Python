@@ -205,8 +205,8 @@ class BinanceCoin(Binance):
 class DataBinanceCoin(DataBinance, BinanceCoin):
     STREAM_PATH_TICK = "public/stream"
     STREAM_PATH_KLINE = "market/stream"
-    CHANNEL_KEY_TICK = "_perp@bookTicker"
-    CHANNEL_KEY_KLINE = "_perp@continuousKline_1s"
+    CHANNEL_KEY_TICK = "@bookTicker"
+    CHANNEL_KEY_KLINE = "@continuousKline_1s"
     EVENT_KLINE = "continuous_kline"
     SYMBOL_KEY_KLINE = "ps"
 
