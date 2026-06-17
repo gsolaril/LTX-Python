@@ -1,6 +1,7 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 from pandas import Timestamp
 from dataclasses import dataclass, field, asdict
+from typing import ClassVar
 from misc import Account, Symbol, TimeFrame
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
@@ -9,9 +10,9 @@ from misc import Account, Symbol, TimeFrame
 @dataclass#█▄▄▄
 class BasePoint:
     time: Timestamp = field(kw_only = True, default = None)
-    STREAM_KEY: str = ...
-    INDEX_KEYS: list[str] = ...
-    CACHE_KEYS: list[str] = ...
+    STREAM_KEY: ClassVar[str] = ...
+    INDEX_KEYS: ClassVar[list[str]] = ...
+    CACHE_KEYS: ClassVar[list[str]] = ...
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         now = Timestamp.now("UTC")
@@ -40,8 +41,8 @@ class DataPoint(BasePoint):
 @dataclass#█▄▄▄▄▄▄▄▄▄▄
 class Quote(BasePoint):
     symbol: Symbol = field(kw_only = True)
-    STREAM_KEY = "{venue}|{symbol}|{tf}"
-    INDEX_KEYS = ["venue", "symbol", "time"]
+    STREAM_KEY: ClassVar[str] = "{venue}|{symbol}|{tf}"
+    INDEX_KEYS: ClassVar[list[str]] = ["venue", "symbol", "time"]
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -53,10 +54,10 @@ class Balance(BasePoint):
     balance: float = field(kw_only = True)
     equity: float = field(kw_only = True, default = None)
     margin: float = field(kw_only = True, default = None)
-    STREAM_KEY = "{venue}|{account_id}|{symbol}"
-    INDEX_KEYS = ["venue", "account_id", "symbol", "time"]
-    BASIC_KEYS = ["balance", "equity", "margin"]
-    CACHE_KEYS = [*BASIC_KEYS, "uPNL", "uPRC", "mPRC", "dus"]
+    STREAM_KEY: ClassVar[str] = "{venue}|{account_id}|{symbol}"
+    INDEX_KEYS: ClassVar[list[str]] = ["venue", "account_id", "symbol", "time"]
+    BASIC_KEYS: ClassVar[list[str]] = ["balance", "equity", "margin"]
+    CACHE_KEYS: ClassVar[list[str]] = [*BASIC_KEYS, "uPNL", "uPRC", "mPRC", "dus"]
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
@@ -99,7 +100,7 @@ class Tick(Quote):
     qa: float = field(kw_only = True, default = None)
     pb: float = field(kw_only = True, default = None)
     qb: float = field(kw_only = True, default = None)
-    CACHE_KEYS = ["pa", "qa", "pb", "qb", "dus"]
+    CACHE_KEYS: ClassVar[list[str]] = ["pa", "qa", "pb", "qb", "dus"]
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄
     def __dict__(self):
@@ -143,9 +144,9 @@ class Candle(Quote):
     hb: float = field(kw_only = True, default = None)
     lb: float = field(kw_only = True, default = None)
     cb: float = field(kw_only = True, default = None)
-    STREAM_KEY = "{venue}|{symbol}|{tf}"
-    INDEX_KEYS = ["tf"] + Quote.INDEX_KEYS.copy()
-    CACHE_KEYS = ["oa", "ha", "la", "ca", "ob", "hb", "lb", "cb", "volume", "dus"]
+    STREAM_KEY: ClassVar[str] = "{venue}|{symbol}|{tf}"
+    INDEX_KEYS: ClassVar[list[str]] = ["tf"] + Quote.INDEX_KEYS.copy()
+    CACHE_KEYS: ClassVar[list[str]] = ["oa", "ha", "la", "ca", "ob", "hb", "lb", "cb", "volume", "dus"]
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄
     def __dict__(self):
@@ -168,10 +169,14 @@ class Candle(Quote):
         self._time_ltick = self.time
         self.time = self.time.floor(self.tf.value)
         self._time_close = self.time + self.tf.value
-        self.oa, self.ob = float(self.oa), float(self.ob)
-        self.ha, self.hb = float(self.ha), float(self.hb)
-        self.la, self.lb = float(self.la), float(self.lb)
-        self.ca, self.cb = float(self.ca), float(self.cb)
+        if (self.oa is None): self.oa = float(self.oa)
+        if (self.ob is None): self.ob = float(self.ob)
+        if (self.ha is None): self.ha = float(self.ha)
+        if (self.la is None): self.la = float(self.la)
+        if (self.ca is None): self.ca = float(self.ca)
+        if (self.hb is None): self.hb = float(self.hb)
+        if (self.lb is None): self.lb = float(self.lb)
+        if (self.cb is None): self.cb = float(self.cb)
         if not self.volume: self.volume = 0
         self.volume = int(self.volume)
 
@@ -240,7 +245,7 @@ class Candle(Quote):
 if (__name__ == "__main__"):
 
     symbol = Symbol(venue = "BINANCE", symbol = "BTCUSDT", quote = "USDT",
-        base = "BTC", id = "BINANCE_BTCUSDT", point_size = 1e-2, point_value = 1)
+        base = "BTC", id = "BINANCE_BTCUSDT", min_price_diff = 1e-2, min_order_size = 1)
     candle = Candle(tf = TimeFrame.M4, symbol = symbol, time = Timestamp.now("UTC"),
         oa = 10000, ha = 10001, la = 9999, ca = 10002, volume = 10000)
     print(candle)
@@ -260,3 +265,7 @@ if (__name__ == "__main__"):
     print(f"uPNL: {account.uPNL}")
     print(f"uPRC: {account.uPRC}")
     print(f"mPRC: {account.mPRC}")
+
+    print(Quote.STREAM_KEY)
+    print(Tick.STREAM_KEY)
+    print(Candle.STREAM_KEY)

@@ -24,6 +24,7 @@ class DataStreamWS(DataStream):
         self.on_ping: Callable = on_ping
         self.get_subs: Callable = get_subs
         self.get_urlh: Callable = get_urlh
+        self.on_message: Callable = on_message
         self._WS: ClientWebSocketResponse = None
         self._subs = set[str]()
 
@@ -49,10 +50,10 @@ class DataStreamWS(DataStream):
             elif self._subs: await self.send_ping(True)
 
             subs_new = list()
-            if (symbols := connector.symbols_new):
+            if (symbols := connector._symbols_new):
                 subs_new, payload_new = self.get_subs(symbols, True)
             subs_old = list()
-            if (symbols := connector.symbols_old):
+            if (symbols := connector._symbols_old):
                 subs_old, payload_old = self.get_subs(symbols, False)
 
             if (self._WS is None) or self._WS.closed:
@@ -65,12 +66,12 @@ class DataStreamWS(DataStream):
                     for payload in payload_new:
                         await self._WS.send_json(payload)
                     self._subs = self._subs | subs_new
-                    connector.symbols_new.clear()
+                    connector._symbols_new.clear()
                 if subs_old:
                     for payload in payload_old:
                         await self._WS.send_json(payload)
                     self._subs = self._subs - subs_old
-                    connector.symbols_old.clear()
+                    connector._symbols_old.clear()
             except Exception as EXC:
                 Log.exception(self.VERBOSE_NOCONN.format(self.name, "sub"), EXC)
 
@@ -79,10 +80,10 @@ class DataStreamWS(DataStream):
 
         async with ClientSession() as session:
             while connector.active:
-                args = await self.get_urlh()
-                Log.info(self.VERBOSE_RECONN.format(self.name, args["url"]))
-                async with session.ws_connect(**args, heartbeat = 30) as WS:
-                    try:
+                try:
+                    args = dict(await self.get_urlh())
+                    Log.info(self.VERBOSE_RECONN.format(self.name, args["url"]))
+                    async with session.ws_connect(**args, heartbeat = 30) as WS:
                         self._WS = WS
                         while not self._subs: await asyncio.sleep(0.5)
                         Log.info(self.VERBOSE_CONNED.format(self.name))
@@ -101,10 +102,10 @@ class DataStreamWS(DataStream):
                             else:
                                 Log.warning(self.VERBOSE_WDTYPE.format(self.name, message.type))
 
-                    except Exception as EXC:
-                        Log.exception(self.VERBOSE_ERROR.format(self.name), EXC)
-                        self._subs.clear(); self._WS = None
-                        if connector.active: await asyncio.sleep(2)
+                except Exception as EXC:
+                    Log.exception(self.VERBOSE_ERROR.format(self.name), EXC)
+                    self._subs.clear(); self._WS = None
+                    if connector.active: await asyncio.sleep(2)
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 cache: Callable = DataStreamWS.cache
@@ -125,7 +126,7 @@ class ConnectorWS(Connector):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update_specs_req(self):
         symbol: Symbol = None
-        symbols = self.symbols_new
+        symbols = self._symbols_new
         if not symbols: symbols = self.symbols
         query_list: List[str] = list[str]()
         for symbol in await self.yield_update(symbols):

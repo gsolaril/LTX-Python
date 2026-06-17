@@ -74,6 +74,7 @@ for ((key_mine, key_exch), filter) in keep_filters.items():
 
 columns_stops = ["min_stops_diff_above", "min_stops_diff_below"]
 data["min_stops_diff"] = data[columns_stops].max(axis = "columns")
+data = data.drop(columns = columns_stops, errors = "ignore")
 
 data["expiration"] = None
 regex = r"_([0-9][0-9][0-9][0-9]+)$"
@@ -103,23 +104,22 @@ query_create_conns_data_config = TextClause(f"""
     );""")
 
 
-data = DataFrame([
-    {
+data = DataFrame([{
         "name": "BinanceUsdm", "url_ws": "wss://fstream.binance.com",
         "url_api": "https://fapi.binance.com/fapi/v1", "active": True,
         "maxlen": 10000, "last_written": None, "last_updated": None,
-        "symbols": {"BTCUSD": True, "ETHUSD": True, "SOLUSD": True}},
-    {
+        "symbols": {"BTCUSDT": True, "ETHUSDT": True, "SOLUSDT": True}
+    }, {
         "name": "BinanceCoin", "url_ws": "wss://dstream.binance.com",
         "url_api": "https://dapi.binance.com/dapi/v1", "active": True,
         "maxlen": 10000, "last_written": None, "last_updated": None,
-        "symbols": {"BTCUSD": True, "ETHUSD": True, "SOLUSD": True}},
-    {
+        "symbols": {"BTCUSD": True, "ETHUSD": True, "SOLUSD": True}
+    }, {
         "name": "BinanceSpot", "url_ws": "wss://stream.binance.com:9443",
         "url_api": "https://api.binance.com/api/v3", "active": True,
         "maxlen": 10000, "last_written": None, "last_updated": None,
-        "symbols": {"BTCUSDT": True, "ETHUSDT": True, "SOLUSDT": True}},
-]).set_index("name")
+        "symbols": {"BTCUSD": True, "ETHUSD": True, "SOLUSD": True}
+    }]).set_index("name")
 
 _now = Timestamp.now("UTC")
 data["last_written"] = data["last_written"].fillna(_now)

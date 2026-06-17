@@ -1,5 +1,6 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 import numpy
+from typing import ClassVar
 from numpy import sign
 from dataclasses import asdict, dataclass
 from pandas import Timestamp, Timedelta
@@ -11,7 +12,7 @@ from misc import Symbol
 #▄▄▄▄▄▄▄▄▄
 @dataclass
 class Order:
-    VERBOSE_SLTP = "For {} order; {} ({}) must be {} entry price ({})"
+    VERBOSE_SLTP: ClassVar[str] = "For {} order; {} ({}) must be {} entry price ({})"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class Type(IntEnum): MARKET = 0; LIMIT = -1; STOP = +1
     class Mode(StrEnum): GTC = "GTC"; IOC = "IOC"

@@ -99,12 +99,10 @@ class DataBinance(ConnectorWS, Binance):
             get_subs = self.get_subs_klines, on_message = self.on_klines,
             on_ping = self.on_ping, get_urlh = self.get_url_headers_klines))
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def get_urlh(self, path: str):
-        return {"url": self.url_ws + "/" + path} 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def get_url_headers_ticks(self): return self.get_urlh(self.STREAM_PATH_TICK)
-    async def get_url_headers_klines(self): return self.get_urlh(self.STREAM_PATH_KLINE)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def get_urlh(self, path: str): return {"url": self.url_ws + "/" + path} 
+    async def get_url_headers_ticks(self): return await self.get_urlh(self.STREAM_PATH_TICK)
+    async def get_url_headers_klines(self): return await self.get_urlh(self.STREAM_PATH_KLINE)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def get_subs(self, symbols: set, is_sub: bool, key: str):
@@ -132,10 +130,8 @@ class DataBinance(ConnectorWS, Binance):
         if symbol is None: return
 
         tse = data.get("E", None)
+        if (tse is not None): ts = Timestamp.utcfromtimestamp(int(tse) / 1e3)
         ts = Timestamp.utcnow()
-        if (tse is not None):
-            ts = Timestamp.utcfromtimestamp(int(tse) / 1e3) + self.offset
-
         symbol = self._specs.get(self.symbol_to_local(symbol), None)
         if symbol is not None: return self, Tick(symbol = symbol, time = ts,
               pa = data["a"], qa = data["A"], pb = data["b"], qb = data["B"])
@@ -155,7 +151,8 @@ class DataBinance(ConnectorWS, Binance):
         tf_str = data.get("i", None)
         closed = data.get("x", False)
         if not tse or not tf_str or not closed: return
-        ts = Timestamp.utcfromtimestamp(int(tse) / 1000)
+        ts = Timestamp.utcfromtimestamp(int(tse) / 1000) + self._offset
+        ts = Timestamp.utcnow()
         symbol = self._specs.get(self.symbol_to_local(symbol), None)
         if symbol is not None: return self, Candle(symbol = symbol, 
             time = ts, tf = TimeFrame.swap_tn(tf_str), volume = data["n"],
@@ -206,8 +203,8 @@ class BinanceCoin(Binance):
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataBinanceCoin(DataBinance, BinanceCoin):
-    STREAM_PATH_TICK = "/public/stream"
-    STREAM_PATH_KLINE = "/market/stream"
+    STREAM_PATH_TICK = "public/stream"
+    STREAM_PATH_KLINE = "market/stream"
     CHANNEL_KEY_TICK = "_perp@bookTicker"
     CHANNEL_KEY_KLINE = "_perp@continuousKline_1s"
     EVENT_KLINE = "continuous_kline"
@@ -228,8 +225,8 @@ class BinanceSpot(Binance):
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataBinanceSpot(DataBinance, BinanceSpot):
-    STREAM_PATH_TICK = "/stream"
-    STREAM_PATH_KLINE = "/stream"
+    STREAM_PATH_TICK = "stream"
+    STREAM_PATH_KLINE = "stream"
     CHANNEL_KEY_TICK = "@bookTicker"
     CHANNEL_KEY_KLINE = "@kline_1s"
     EVENT_KLINE = "kline"
@@ -250,8 +247,8 @@ class BinanceUsdm(Binance):
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataBinanceUsdm(DataBinance, BinanceUsdm):
-    STREAM_PATH_TICK = "/public/stream"
-    STREAM_PATH_KLINE = "/market/stream"
+    STREAM_PATH_TICK = "public/stream"
+    STREAM_PATH_KLINE = "market/stream"
     CHANNEL_KEY_TICK = "@bookTicker"
     CHANNEL_KEY_KLINE = "_perpetual@continuousKline_1s"
     EVENT_KLINE = "continuous_kline"

@@ -1,8 +1,8 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import asyncio
+import asyncio, json
 from getpass import getpass
-from pandas import Timestamp, Timedelta
 from dataclasses import dataclass, field
+from pandas import Timestamp, Timedelta, read_sql_query
 from typing import Any, List, Dict, Callable, NamedTuple
 from sqlalchemy import Connection as DBConn, TextClause
 from collections import OrderedDict
@@ -52,7 +52,6 @@ class Venue(metaclass = Meta):
             creds_dict[key] = value
 
         self.creds = self.Credentials(**creds_dict)
-        self.offset = Timedelta(0) # To be adjusted by API request
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update_timediff(self): ...
@@ -78,13 +77,14 @@ class Connector:
     maxlen: int = field(init = False, kw_only = True, default = 10000)
     last_written: Timestamp = field(init = False, kw_only = True, default = None)
     last_updated: Timestamp = field(init = False, kw_only = True, default = None)
-    symbols: set[str] = field(init = False, kw_only = True, default = None)
+    symbols: set[str] = field(init = False, kw_only = True, default_factory = set)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
-        self.name = self.__class__.__name__
         self._streams = dict[str, object]()
         self._specs = OrderedDict[str, Symbol]()
         self._crons = {self.reconfig: TimeFrame.S5}
+        self.name = self.__class__.__name__
+        self._offset = Timedelta(0)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def start_cron(self, cron: Callable, tf: TimeFrame):
@@ -122,8 +122,8 @@ class Connector:
     
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def reconfig(self):
-        self.symbols_new = set[str]()
-        self.symbols_old = set[str]()
+        self._symbols_new = set[str]()
+        self._symbols_old = set[str]()
         with DB_ORM.connect() as conn:
             await self.update_config(conn)
             await self.update_specs(conn)
@@ -132,26 +132,32 @@ class Connector:
     async def update_config(self, conn: DBConn):
         TABLE = "conns_data_config"
         query = f"SELECT * FROM {TABLE} WHERE (name = '{self.VENUE}');"
-        result: List[Dict] = conn.execute(TextClause(query)).fetchall()
-        if not result: return Log.error(f"No config found:\n => {query}")
-        name, symbols = result[0].pop("name"), result[0].pop("symbols")
-        for item in result[0].items(): setattr(self, *item)
+        result = dict[str, Any](read_sql_query(query, conn).iloc[0])
+        symbols_json = json.loads(result.pop("symbols"))
+        for key, value in result.items():
+            if (key == "name"): continue
+            setattr(self, key, value)
+            
         self.last_updated = Timestamp.now("UTC")
-    
-        for symbol, keep in dict.items(symbols):
+        for symbol, keep in dict.items(symbols_json):
             available = (symbol in self.symbols)
             if available and keep: continue
-            elif available and not keep: self.symbols_old.add(symbol)
-            elif not available and keep: self.symbols_new.add(symbol)
+            elif available and not keep:
+                self._symbols_old.add(symbol)
+                self.symbols.remove(symbol)
+            elif not available and keep:
+                self._symbols_new.add(symbol)
+                self.symbols.add(symbol)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update_specs(self, conn: DBConn):
-        if not self.symbols_new: return
+        if not self._symbols_new: return
         TABLE = "symbol_specs"
         query = f"SELECT * FROM {TABLE} WHERE (venue = '{self.VENUE}') AND (symbol IN ({{}}))"
-        query = query.format(str.join(", ", [f"'{symbol}'" for symbol in self.symbols_new]))
-        result = conn.execute(TextClause(query)).fetchall()
+        query = query.format(str.join(", ", [f"'{symbol}'" for symbol in self._symbols_new]))
+        result = read_sql_query(query, conn).to_dict(orient = "records")
         if not result: return Log.error(f"No specs found:\n => {query}")
+
         for item in result: self._specs[item["symbol"]] = Symbol(**item)
         while (len(self._specs) >= self.maxlen): self._specs.popitem(last = False)
 
@@ -169,6 +175,7 @@ class DataStream:
     VERBOSE_WDTYPE = "\"{}\" weird type: \"{}\""
     VERBOSE_NOJSON = "\"{}\" got non-JSON: \"{}\""
     VERBOSE_ERROR = "\"{}\" error"
+    VERBOSE_ERROR_XADD = "\"{}\" XADD failed:\n => {}"
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, name: str): self.name = name
@@ -191,16 +198,16 @@ class DataStream:
     def cache(cls, func: Callable):
         #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         async def wrapper(*args, **kwargs):
-            conn: Connector; obj: BasePoint
+            conn: Connector; obj: BasePoint = None
             conn, obj = await func(*args, **kwargs)
-            suffix, (time, *payload) = obj.as_cache
-            id: str = f"{time // 1000}-{time % 1000}"
+            suffix, time, payload = obj.as_cache
             stream = cls.STREAM_PREFIX + "|" + suffix
             stream_exists = await DB_CCH.exists(stream)
+            id: str = f"{time // 1000}-{time % 1000:03d}"
             if not stream_exists: stream_exists = await DB_CCH.xgroup_create(
-                name = stream, groupname = stream, id = "0-0", mkstream = True)
-            sent = await DB_CCH.xadd(stream, payload, id, maxlen = conn.maxlen)
-            if not sent: Log.error(f"\"{stream}\" XADD failed:\n => {payload}")
-            if Config.DEBUG_MODE: Log.debug(f"\"{stream}\" XADD @ {id}: {sent!r}")
+                name = stream, groupname = stream, id = "*", mkstream = True)
+            try: assert (await DB_CCH.xadd(stream, payload, id, int(conn.maxlen)))
+            except Exception as EXC:
+                return Log.error(cls.VERBOSE_ERROR_XADD.format(stream, payload), EXC)
+            if Config.DEBUG_MODE: Log.debug(f"\"{stream}\" XADD @ {id}: {payload!r}")
         return wrapper
-

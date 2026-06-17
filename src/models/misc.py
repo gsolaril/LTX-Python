@@ -1,6 +1,6 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 import os, sys
-from typing import Any, List
+from typing import Any, List, ClassVar
 from dataclasses import dataclass, field, Field
 from pandas import Timestamp, Timedelta
 from enum import Enum, EnumMeta
@@ -36,9 +36,9 @@ class Meta(type):
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DBClass(metaclass = Meta):
     id: str = field(kw_only = True)
-    SQL_TZ_FORMAT: str = "TIMESTAMP('T%Y-%m-%d %H:%M:%S.%f') AT TIME ZONE 'UTC'"
-    SEP: str = " "
-    TABLE: str = "some_table"
+    SQL_TZ_FORMAT: ClassVar[str] = "TIMESTAMP('T%Y-%m-%d %H:%M:%S.%f') AT TIME ZONE 'UTC'"
+    SEP: ClassVar[str] = " "
+    TABLE: ClassVar[str] = "some_table"
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄
     def sql_values(self):
@@ -65,7 +65,7 @@ class Account(DBClass):
     margin: float = field(kw_only = True, default = None)
     last_updated: Timestamp = field(kw_only = True,
       default_factory = lambda: Timestamp.now("UTC"))
-    INDEX_KEYS = ["venue", "id"]
+    INDEX_KEYS: ClassVar[list[str]] = ["venue", "id"]
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __setattr__(self, name: str, value: Any):
         super().__setattr__(name, value)
@@ -113,8 +113,8 @@ class Symbol(DBClass):
     min_price_diff: float = field(kw_only = True, default = None)
     min_order_size: float = field(kw_only = True, default = None)
     expiration: Timestamp = field(kw_only = True, default = None)
-    INDEX_KEYS = ["venue", "symbol"]
-    _TABLE = "symbol_specs"
+    INDEX_KEYS: ClassVar[list[str]] = ["venue", "symbol"]
+    TABLE: ClassVar[str] = "symbol_specs"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         if self.base is None: self.base = self.symbol
