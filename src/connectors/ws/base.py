@@ -89,7 +89,11 @@ class DataStreamWS(DataStream):
                         Log.info(self.VERBOSE_CONNED.format(self.name))
                         async for message in self._WS:
                             if (message.type == WSMsgType.TEXT):
-                                try: asyncio.create_task(self.on_message(message.json()))
+                                try:
+                                    message_json: dict = message.json()
+                                    result = await self.on_message(message_json)
+                                    if (result is None): continue
+                                    await connector._queue.put(result)
                                 except json.JSONDecodeError:
                                     text = str(message.data)
                                     if (text.lower() == "pong"): pass
@@ -107,8 +111,6 @@ class DataStreamWS(DataStream):
                     self._subs.clear(); self._WS = None
                     if connector.active: await asyncio.sleep(2)
 
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-cache: Callable = DataStreamWS.cache
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

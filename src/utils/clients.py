@@ -80,6 +80,15 @@ class CreateDBCCH(CreateClient):
     _def_type: str = "redis"
     _defs = dict.fromkeys(["type", "database", "username"], _def_type)
     _defs["ip"] = f"{DEFAULT_HOST}:{DOCKER[_def_type]["ports"][0]}"
+    ERROR = "DB_CCH (Redis) connection test failed"
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def test_redis(cls, **args):
+        client = RedisClient(**args)
+        OK = await client.ping()
+        assert OK, cls.ERROR
+        await client.aclose()
+        return RedisClient(**args)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def from_redis(cls) -> RedisClient:
@@ -87,11 +96,10 @@ class CreateDBCCH(CreateClient):
         defs["password"] = cls._def_password()
         _credentials = Credentials.from_kv(src = "DB_CCH",
           defs = defs, data = AUTH.get("DB_CCH", dict()))
-        client = RedisClient(host = _credentials.IP.split(":")[0],
-            port = int(_credentials.IP.split(":")[1]), db = 0,
-            username = _credentials.USERNAME, password = _credentials.PASSWORD)
-        assert asyncio.run(client.ping()), "DB_CCH (Redis) connection test failed"
-        return client
+        host, port = _credentials.IP.split(":")
+        args = {"host": host, "port": int(port), "db": 0, "max_connections": 128,
+            "username": _credentials.USERNAME, "password": _credentials.PASSWORD}
+        return asyncio.run(cls.test_redis(**args))
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class CreateDBTSS(CreateClient):

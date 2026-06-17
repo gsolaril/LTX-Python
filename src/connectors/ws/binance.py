@@ -5,7 +5,7 @@ from urllib.parse import urlencode
 from aiohttp import ClientSession
 from aiohttp import ClientWebSocketResponse
 from typing import Any, List, Dict, NamedTuple
-from .base import ConnectorWS, DataStreamWS, cache
+from .base import ConnectorWS, DataStreamWS
 from src.connectors.base import Venue
 from src.models import *
 from src.utils import *
@@ -120,8 +120,7 @@ class DataBinance(ConnectorWS, Binance):
     async def on_ping(self, WS: ClientWebSocketResponse, sender: bool = False):
         if not sender: return await WS.send_str("pong")
 
-    #▄▄▄▄▄▄▄
-    @cache#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_ticks(self, data: Dict):
         if (data := data.get("data", None)) is None: return
         event = data.get("e", None)
@@ -133,11 +132,11 @@ class DataBinance(ConnectorWS, Binance):
         if (tse is not None): ts = Timestamp.utcfromtimestamp(int(tse) / 1e3)
         ts = Timestamp.utcnow()
         symbol = self._specs.get(self.symbol_to_local(symbol), None)
-        if symbol is not None: return self, Tick(symbol = symbol, time = ts,
-              pa = data["a"], qa = data["A"], pb = data["b"], qb = data["B"])
+        if symbol is None: return None
+        return Tick(symbol = symbol, time = ts, pa = data["a"],
+                qa = data["A"], pb = data["b"], qb = data["B"])
             
-    #▄▄▄▄▄▄▄
-    @cache#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_klines(self, data: Dict):
         if (data := data.get("data", None)) is None: return
         if (event := data.get("e", None)) is None: return
@@ -154,7 +153,8 @@ class DataBinance(ConnectorWS, Binance):
         ts = Timestamp.utcfromtimestamp(int(tse) / 1000) + self._offset
         ts = Timestamp.utcnow()
         symbol = self._specs.get(self.symbol_to_local(symbol), None)
-        if symbol is not None: return self, Candle(symbol = symbol, 
+        if symbol is None: return None
+        return Candle(symbol = symbol, 
             time = ts, tf = TimeFrame.swap_tn(tf_str), volume = data["n"],
             oa = data["o"], ha = data["h"], la = data["l"], ca = data["c"],
             ob = data["o"], hb = data["h"], lb = data["l"], cb = data["c"])

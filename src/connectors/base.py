@@ -3,7 +3,7 @@ import asyncio, json
 from getpass import getpass
 from dataclasses import dataclass, field
 from pandas import Timestamp, Timedelta, read_sql_query
-from typing import Any, List, Dict, Callable, NamedTuple
+from typing import Any, ClassVar, Callable, NamedTuple
 from sqlalchemy import Connection as DBConn, TextClause
 from collections import OrderedDict
 from src.models import *
@@ -78,12 +78,16 @@ class Connector:
     last_written: Timestamp = field(init = False, kw_only = True, default = None)
     last_updated: Timestamp = field(init = False, kw_only = True, default = None)
     symbols: set[str] = field(init = False, kw_only = True, default_factory = set)
+
+    STREAM_PREFIX: ClassVar[str] = "LTX|DATA"
+    VERBOSE_XADD_OK: ClassVar[str] = "[Q{}] \"{}\" XADD @ {} => {}"
+    VERBOSE_XADD_ERROR: ClassVar[str] = "\"{}\" XADD failed:\n => {}"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
+        self.name = self.__class__.__name__
         self._streams = dict[str, object]()
         self._specs = OrderedDict[str, Symbol]()
         self._crons = {self.reconfig: TimeFrame.S5}
-        self.name = self.__class__.__name__
         self._offset = Timedelta(0)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -91,7 +95,7 @@ class Connector:
         class_name = self.__class__.__name__
         cron_name = class_name + "/cron/" + cron.__name__
         error = f"\"{cron_name}\" cron loop failed"
-        next = Timestamp.now("UTC").floor(tf.value)
+        next = Timestamp.now("UTC").ceil(tf.value)
         while self.active:
             if (now := Timestamp.now("UTC")) < next:
                 await asyncio.sleep(0.5) ; continue
@@ -110,7 +114,12 @@ class Connector:
                 tasks[name] = asyncio.create_task(
                     self.start_cron(cron, tf), name = name)
                 verbose_list.append(f" => {name}: {tasks[name]!r}")
+            await self.reconfig()
+            name = f"{class_name}/writer"
+            tasks[name] = asyncio.create_task(self.writer(), name = name)
+            verbose_list.append(f" => {name}: {tasks[name]!r}")
             for name, stream in self._streams.items():
+                name = f"{class_name}/{name}"
                 tasks[name] = asyncio.create_task(stream(self), name = name)
                 verbose_list.append(f" => {name}: {tasks[name]!r}")
             verbose = f"Starting {len(tasks)} tasks in \"{class_name}\":\n"
@@ -157,9 +166,27 @@ class Connector:
         query = query.format(str.join(", ", [f"'{symbol}'" for symbol in self._symbols_new]))
         result = read_sql_query(query, conn).to_dict(orient = "records")
         if not result: return Log.error(f"No specs found:\n => {query}")
-
         for item in result: self._specs[item["symbol"]] = Symbol(**item)
         while (len(self._specs) >= self.maxlen): self._specs.popitem(last = False)
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def writer(self):
+        self._queue = asyncio.Queue(self.maxlen)
+        while self.active:
+            N: int = self._queue._queue.__len__()
+            if (N == 0): await asyncio.sleep(1e-3)
+            else:
+                point: BasePoint = await self._queue.get()
+                suffix, time_us, payload = point.as_cache
+                stream = self.STREAM_PREFIX + "|" + suffix
+                id = str(time_us)[: -3] + "-" + str(time_us)[-3:]
+                if not await DB_CCH.exists(stream): await DB_CCH.xgroup_create(
+                      name = stream, groupname = stream, id = "$", mkstream = True)
+                try: assert (await DB_CCH.xadd(stream, payload, id, int(self.maxlen)))
+                except Exception as EXC: Log.error(
+                    self.VERBOSE_XADD_ERROR.format(stream, payload), EXC)
+                if Config.DEBUG_MODE: Log.debug(
+                    self.VERBOSE_XADD_OK.format(N, stream, id, payload))
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -167,7 +194,6 @@ class Connector:
 class DataStream:
 
     BULLET = "\n\t-> "
-    STREAM_PREFIX = "LTX|DATA"
     VERBOSE_CONNED = "\"{}\" ready for messages."
     VERBOSE_RECONN = "\"{}\" connecting to \"{}\"..."
     VERBOSE_NOCONN = "\"{}\" {} failed (will retry after reconnect)"
@@ -192,22 +218,3 @@ class DataStream:
         if old: verbose += "\n => Old (unsubscribing from):"
         for sub in sorted(old): verbose += self.BULLET + sub
         return verbose
-
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def cache(cls, func: Callable):
-        #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-        async def wrapper(*args, **kwargs):
-            conn: Connector; obj: BasePoint = None
-            conn, obj = await func(*args, **kwargs)
-            suffix, time, payload = obj.as_cache
-            stream = cls.STREAM_PREFIX + "|" + suffix
-            stream_exists = await DB_CCH.exists(stream)
-            id: str = f"{time // 1000}-{time % 1000:03d}"
-            if not stream_exists: stream_exists = await DB_CCH.xgroup_create(
-                name = stream, groupname = stream, id = "*", mkstream = True)
-            try: assert (await DB_CCH.xadd(stream, payload, id, int(conn.maxlen)))
-            except Exception as EXC:
-                return Log.error(cls.VERBOSE_ERROR_XADD.format(stream, payload), EXC)
-            if Config.DEBUG_MODE: Log.debug(f"\"{stream}\" XADD @ {id}: {payload!r}")
-        return wrapper
