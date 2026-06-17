@@ -109,6 +109,7 @@ class Symbol(DBClass):
     quote: str = field(kw_only = True)
     base: str = field(kw_only = True, default = None)
     id: str = field(kw_only = True, default = None)
+    min_stops_diff: float = field(kw_only = True, default = None)
     min_price_diff: float = field(kw_only = True, default = None)
     min_order_size: float = field(kw_only = True, default = None)
     expiration: Timestamp = field(kw_only = True, default = None)

@@ -5,11 +5,11 @@ from urllib.parse import urlencode
 from aiohttp import ClientSession
 from aiohttp import ClientWebSocketResponse
 from typing import Any, List, Dict, NamedTuple
-from base import ConnectorWS, DataStreamWS, cache
+from .base import ConnectorWS, DataStreamWS, cache
 from src.connectors.base import Venue
 from src.models import *
 from src.utils import *
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -78,11 +78,10 @@ class Binance(Venue):
             if mapped is not None: return mapped
         if "orderId" in response: return "OK"
 
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class DataBinance(Binance, ConnectorWS):
+class DataBinance(ConnectorWS, Binance):
 
     STREAM_PATH_TICK = ...
     STREAM_PATH_KLINE = ...
@@ -123,8 +122,8 @@ class DataBinance(Binance, ConnectorWS):
     async def on_ping(self, WS: ClientWebSocketResponse, sender: bool = False):
         if not sender: return await WS.send_str("pong")
 
-    #▄▄▄▄▄▄▄▄▄▄
-    @cache#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄
+    @cache#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_ticks(self, data: Dict):
         if (data := data.get("data", None)) is None: return
         event = data.get("e", None)
@@ -141,8 +140,8 @@ class DataBinance(Binance, ConnectorWS):
         if symbol is not None: return self, Tick(symbol = symbol, time = ts,
               pa = data["a"], qa = data["A"], pb = data["b"], qb = data["B"])
             
-    #▄▄▄▄▄▄▄▄▄▄
-    @cache#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄
+    @cache#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_klines(self, data: Dict):
         if (data := data.get("data", None)) is None: return
         if (event := data.get("e", None)) is None: return
@@ -163,13 +162,13 @@ class DataBinance(Binance, ConnectorWS):
             oa = data["o"], ha = data["h"], la = data["l"], ca = data["c"],
             ob = data["o"], hb = data["h"], lb = data["l"], cb = data["c"])
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def yield_specs(self, symbols: list):
-
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def yield_specs(self, symbols: set[str]):
         symbols_new: List = list()
         symbol_dict: Dict = dict()
         args = {"url": self.url_api + "/exchangeInfo"}
-        if symbols: args["params"] = {"symbols": symbols}
+        if (symbols := list(symbols)):
+            args["params"] = {"symbols": symbols}
           
         async with ClientSession() as session:
             async with session.get(**args) as request:
@@ -206,7 +205,7 @@ class BinanceCoin(Binance):
     def symbol_to_venue(cls, symbol: str): return symbol.lower()
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class DataBinanceCoin(BinanceCoin, DataBinance):
+class DataBinanceCoin(DataBinance, BinanceCoin):
     STREAM_PATH_TICK = "/public/stream"
     STREAM_PATH_KLINE = "/market/stream"
     CHANNEL_KEY_TICK = "_perp@bookTicker"
@@ -228,7 +227,7 @@ class BinanceSpot(Binance):
     def symbol_to_venue(cls, symbol: str): return symbol
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class DataBinanceSpot(BinanceSpot, DataBinance):
+class DataBinanceSpot(DataBinance, BinanceSpot):
     STREAM_PATH_TICK = "/stream"
     STREAM_PATH_KLINE = "/stream"
     CHANNEL_KEY_TICK = "@bookTicker"
@@ -250,7 +249,7 @@ class BinanceUsdm(Binance):
     def symbol_to_venue(cls, symbol: str): return symbol.lower()
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class DataBinanceUsdm(BinanceUsdm, DataBinance):
+class DataBinanceUsdm(DataBinance, BinanceUsdm):
     STREAM_PATH_TICK = "/public/stream"
     STREAM_PATH_KLINE = "/market/stream"
     CHANNEL_KEY_TICK = "@bookTicker"
@@ -260,14 +259,3 @@ class DataBinanceUsdm(BinanceUsdm, DataBinance):
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-async def test_data():
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def log(tick: Tick): return Log.debug(tick.__dict__)
-    await DataBinanceUsdm(callbacks = [log]).start()
-
-#███████████████████████████████████████████████████████████████████████████████████████████████████████████
-#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-if (__name__ == "__main__"):
-    asyncio.run(test_data())

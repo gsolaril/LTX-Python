@@ -120,13 +120,14 @@ class ConnectorWS(Connector):
             self._streams[f"{stream.name}/stream"] = stream.stream
             self._streams[f"{stream.name}/update"] = stream.update
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def yield_update(self): ...
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_specs(self, new: set[str], old: set[str]):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def yield_update(self, symbols: set[str]): ...
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update_specs_req(self):
         symbol: Symbol = None
-        query_list: List[str] = list[str]()
+        symbols = self.symbols_new
         if not symbols: symbols = self.symbols
+        query_list: List[str] = list[str]()
         for symbol in await self.yield_update(symbols):
             query_list.append(symbol.sql_values)
             self._specs[symbol.symbol] = symbol

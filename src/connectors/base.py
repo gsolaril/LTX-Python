@@ -1,11 +1,11 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 import asyncio
 from getpass import getpass
-from dataclasses import dataclass, field
 from pandas import Timestamp, Timedelta
-from typing import Any, Callable, NamedTuple
+from dataclasses import dataclass, field
+from typing import Any, List, Dict, Callable, NamedTuple
+from sqlalchemy import Connection as DBConn, TextClause
 from collections import OrderedDict
-from sqlalchemy import TextClause
 from src.models import *
 from src.utils import *
 
@@ -13,10 +13,16 @@ from src.utils import *
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class Meta(type):
+    REMOVE_WORDS = ("Data", "Exec")
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __new__(mcls: type, name: str, bases: tuple[type], namespace: dict[str, Any]):
         cls = super().__new__(mcls, name, bases, namespace)
-        if any(B is Venue for B in bases): cls.VENUE = name
+        if any(issubclass(base, Venue) for base in bases):
+            if ((venue := name) != "Venue"):
+                for word in Meta.REMOVE_WORDS:
+                    if not venue.startswith(word): continue
+                    venue = venue.replace(word, "").strip()
+                cls.VENUE = venue
         return cls
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -78,8 +84,7 @@ class Connector:
         self.name = self.__class__.__name__
         self._streams = dict[str, object]()
         self._specs = OrderedDict[str, Symbol]()
-        self._crons = {self.reconfig: TimeFrame.S5,
-                    self.update_specs: TimeFrame.D1}
+        self._crons = {self.reconfig: TimeFrame.S5}
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def start_cron(self, cron: Callable, tf: TimeFrame):
@@ -90,50 +95,65 @@ class Connector:
         while self.active:
             if (now := Timestamp.now("UTC")) < next:
                 await asyncio.sleep(0.5) ; continue
-            try: next = now.ceil(tf.value) ; await cron(self)
+            try: next = now.ceil(tf.value) ; await cron()
             except Exception as EXC: Log.exception(error, EXC)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def start(self):
         try:
+            self.active = True
             verbose_list = list[str]()
             tasks = dict[str, asyncio.Task]()
             class_name = self.__class__.__name__
             for cron, tf in self._crons.items():
-                name = f"{class_name}/{cron.__name__}:{tf!r}"
+                name = f"{class_name}/cron/{cron.__name__}:{tf!r}"
                 tasks[name] = asyncio.create_task(
-                  self.start_cron(cron, tf), name = name)
+                    self.start_cron(cron, tf), name = name)
                 verbose_list.append(f" => {name}: {tasks[name]!r}")
             for name, stream in self._streams.items():
                 tasks[name] = asyncio.create_task(stream(self), name = name)
-                verbose_list.append(f" => {name}: {tasks[name]!r}")                
-            await asyncio.gather(*tasks.values(), return_exceptions = True)
+                verbose_list.append(f" => {name}: {tasks[name]!r}")
             verbose = f"Starting {len(tasks)} tasks in \"{class_name}\":\n"
             Log.info(verbose + str.join("\n", verbose_list))
+            await asyncio.gather(*tasks.values(), return_exceptions = True)
         except KeyboardInterrupt: Log.success("Exiting...")
         except Exception as EXC: Log.exception(EXC)
+        finally: self.active = False
     
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def reconfig(self):
-        TABLE = "conns_data_config"
-        with DB_ORM.connect() as conn:
-            query = f"SELECT * FROM {TABLE} WHERE (stream = '{self.name}');"
-            result: dict = conn.execute(TextClause(query)).fetchall()[0]
-            name, symbols = result.pop("name"), result.pop("symbols")
-            for item in result.items(): setattr(self, *item)
-            self.last_updated = Timestamp.now("UTC")
-        
         self.symbols_new = set[str]()
         self.symbols_old = set[str]()
+        with DB_ORM.connect() as conn:
+            await self.update_config(conn)
+            await self.update_specs(conn)
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update_config(self, conn: DBConn):
+        TABLE = "conns_data_config"
+        query = f"SELECT * FROM {TABLE} WHERE (name = '{self.VENUE}');"
+        result: List[Dict] = conn.execute(TextClause(query)).fetchall()
+        if not result: return Log.error(f"No config found:\n => {query}")
+        name, symbols = result[0].pop("name"), result[0].pop("symbols")
+        for item in result[0].items(): setattr(self, *item)
+        self.last_updated = Timestamp.now("UTC")
+    
         for symbol, keep in dict.items(symbols):
             available = (symbol in self.symbols)
             if available and keep: continue
             elif available and not keep: self.symbols_old.add(symbol)
             elif not available and keep: self.symbols_new.add(symbol)
-        if self.symbols_new: await self.update_specs()
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_specs(self): ...
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update_specs(self, conn: DBConn):
+        if not self.symbols_new: return
+        TABLE = "symbol_specs"
+        query = f"SELECT * FROM {TABLE} WHERE (venue = '{self.VENUE}') AND (symbol IN ({{}}))"
+        query = query.format(str.join(", ", [f"'{symbol}'" for symbol in self.symbols_new]))
+        result = conn.execute(TextClause(query)).fetchall()
+        if not result: return Log.error(f"No specs found:\n => {query}")
+        for item in result: self._specs[item["symbol"]] = Symbol(**item)
+        while (len(self._specs) >= self.maxlen): self._specs.popitem(last = False)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -167,8 +187,8 @@ class DataStream:
         return verbose
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def cache(cls, func: Callable):
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def cache(cls, func: Callable):
         #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         async def wrapper(*args, **kwargs):
             conn: Connector; obj: BasePoint
@@ -181,5 +201,6 @@ class DataStream:
                 name = stream, groupname = stream, id = "0-0", mkstream = True)
             sent = await DB_CCH.xadd(stream, payload, id, maxlen = conn.maxlen)
             if not sent: Log.error(f"\"{stream}\" XADD failed:\n => {payload}")
+            if Config.DEBUG_MODE: Log.debug(f"\"{stream}\" XADD @ {id}: {sent!r}")
         return wrapper
 
