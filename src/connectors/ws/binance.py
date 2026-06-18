@@ -5,7 +5,8 @@ from urllib.parse import urlencode
 from aiohttp import ClientSession
 from aiohttp import ClientWebSocketResponse
 from typing import Any, List, Dict, NamedTuple
-from .base import ConnectorWS, StreamWS
+from .base import DataConnectorWS, DataStreamWS
+from .base import AccountConnectorWS, ExecStreamWS
 from src.connectors.base import Venue
 from src.models import *
 from src.utils import *
@@ -18,8 +19,8 @@ class Binance(Venue):
     URL_WS = ...
     URL_API = ...
     STATUS = {"NEW": "OK", "FILLED": "OK", "CANCELED": "OK", "PARTIALLY_FILLED": "OK"}
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    class Credentials(NamedTuple): api_key: str; secret: str
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    class Credentials(Venue.Credentials): api_key: str; secret: str
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def signature(self, payload: Dict[str, Any]):
         hmac_key = str.encode(self.creds.secret, "utf-8")
@@ -80,8 +81,8 @@ class Binance(Venue):
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class DataBinance(ConnectorWS, Binance):
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class DataBinance(DataConnectorWS, Binance):
 
     STREAM_PATH_TICK = ...
     STREAM_PATH_KLINE = ...
@@ -92,10 +93,10 @@ class DataBinance(ConnectorWS, Binance):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self): super().__init__(
-        ticks = StreamWS(name = self.__class__.__name__ + "/ticks",
+        ticks = DataStreamWS(name = self.__class__.__name__ + "/ticks",
             get_subs = self.get_subs_ticks, on_message = self.on_ticks,
             on_ping = self.on_ping, get_urlh = self.get_url_headers_ticks),
-        klines = StreamWS(name = self.__class__.__name__ + "/klines",
+        klines = DataStreamWS(name = self.__class__.__name__ + "/klines",
             get_subs = self.get_subs_klines, on_message = self.on_klines,
             on_ping = self.on_ping, get_urlh = self.get_url_headers_klines))
 
@@ -159,44 +160,8 @@ class DataBinance(ConnectorWS, Binance):
             oa = data["o"], ha = data["h"], la = data["l"], ca = data["c"],
             ob = data["o"], hb = data["h"], lb = data["l"], cb = data["c"])
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def yield_specs(self, symbols: set[str]):
-        symbols_new: List = list()
-        symbol_dict: Dict = dict()
-        args = {"url": self.url_api + "/exchangeInfo"}
-        if (symbols := list(symbols)):
-            args["params"] = {"symbols": symbols}
-          
-        async with ClientSession() as session:
-            async with session.get(**args) as request:
-                response: dict = await request.json()
-                symbols_new = response.get("symbols", [])
-
-        for symbol_dict in symbols_new:
-            if "symbol" not in symbol_dict: continue
-            symbol = symbol_dict["symbol"]
-            new = {"venue": self.VENUE, "symbol": symbol,
-                "base": symbol_dict.get("baseAsset", None),
-                "quote": symbol_dict.get("quoteAsset", None)}
-            if (exp := symbol_dict.get("deliveryDate", None)): 
-                new["expiration"] = Timestamp.utcfromtimestamp(int(exp) / 1e3)
-            for filter_dict in symbol_dict.get("filters", list()):
-                if (filter_dict["filterType"].upper() == "PRICE_FILTER"):
-                    new["min_price_diff"] = float(filter_dict["tickSize"])
-                elif (filter_dict["filterType"].upper() == "LOT_SIZE"):
-                    new["min_order_size"] = float(filter_dict["stepSize"])
-                    
-            yield Symbol(**new)
-
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class ExecBinance(Binance, ConnectorWS):
-
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __init__(self, creds: Binance.Credentials = None):
-        super().__init__(creds = creds)
-        
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

@@ -1,12 +1,11 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 import asyncio, json
-from pandas import Timestamp
-from dataclasses import dataclass, field
-from typing import Any, Any, Callable, List
+from typing import Any, Callable, ClassVar
+from pandas import Timestamp, read_sql_query
 from aiohttp import WSMsgType, ClientSession
 from aiohttp import ClientWebSocketResponse
-from sqlalchemy.sql.lambdas import NullLambdaStatement
-from src.connectors.base import Stream, Connector
+from src.connectors.base import Venue, Stream, Connector
+from src.connectors.base import DataConnector, AccountConnector 
 from src.models import *
 from src.utils import *
 
@@ -14,14 +13,13 @@ from src.utils import *
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class StreamWS(Stream):
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __init__(self, name: str, get_subs: Callable, on_message: Callable,
-                       get_urlh: Callable = None, on_ping: Callable = None):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, name: str, on_message: Callable,
+              url_args: dict, on_ping: Callable = None):
 
         super().__init__(name)
+        self.url_args: dict = url_args
         self.on_ping: Callable = on_ping
-        self.get_subs: Callable = get_subs
-        self.get_urlh: Callable = get_urlh
         self.on_message: Callable = on_message
         self._WS: ClientWebSocketResponse = None
         self._WS_connected = asyncio.Event()
@@ -41,53 +39,18 @@ class StreamWS(Stream):
                 self._subs.clear()
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update(self, connector: Connector):
-        
-        Log.warning(f"WS for \"{self.name}\" channel loop started.")
-        
-        while connector.active:
-            await asyncio.sleep(1)
-            await self._WS_connected.wait()
-            if self._subs: await self.send_ping(True)
-
-            subs_new = list()
-            if (symbols := connector._symbols_new):
-                subs_new, payload_new = self.get_subs(symbols, True)
-            subs_old = list()
-            if (symbols := connector._symbols_old):
-                subs_old, payload_old = self.get_subs(symbols, False)
-
-            if (self._WS is None) or self._WS.closed:
-                self._subs.clear(); continue
-            if (not subs_old) and (not subs_new): continue
-            Log.info(self.verbose_subs(subs_old, subs_new))
-
-            try:
-                if subs_new:
-                    for payload in payload_new:
-                        await self._WS.send_json(payload)
-                    self._subs = self._subs | subs_new
-                    connector._symbols_new.clear()
-                    self._subs_known.set()
-                if subs_old:
-                    for payload in payload_old:
-                        await self._WS.send_json(payload)
-                    self._subs = self._subs - subs_old
-                    connector._symbols_old.clear()
-            except Exception as EXC:
-                Log.exception(self.VERBOSE_NOCONN.format(self.name, "sub"), EXC)
-
+    async def update(self, connector: Connector): ...
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def stream(self, connector: Connector):
 
         async with ClientSession() as session:
             while connector.active:
                 try:
-                    args = dict(await self.get_urlh())
+                    args = self.url_args
                     Log.info(self.VERBOSE_RECONN.format(self.name, args["url"]))
                     async with session.ws_connect(**args, heartbeat = 30) as WS:
-                        self._WS = WS
-                        self._WS_connected.set()
+                        self._WS = WS ; self._WS_connected.set()
+                        connector._sockets[self.name] = self._WS
                         await self._subs_known.wait()
                         Log.info(self.VERBOSE_CONNED.format(self.name))
                         async for message in self._WS:
@@ -119,31 +82,127 @@ class StreamWS(Stream):
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class ConnectorWS(Connector):
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class DataConnectorWS(DataConnector):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, **streams):
         super().__init__()
-        stream: StreamWS
+        stream: DataStreamWS
         for stream in streams.values():
             self._streams[f"{stream.name}/stream"] = stream.stream
             self._streams[f"{stream.name}/update"] = stream.update
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def yield_update(self, symbols: set[str]): ...
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_specs_req(self):
-        symbol: Symbol = None
-        symbols = self._symbols_new
-        if not symbols: symbols = self.symbols
-        query_list: List[str] = list[str]()
-        for symbol in await self.yield_update(symbols):
-            query_list.append(symbol.sql_values)
-            self._specs[symbol.symbol] = symbol
-            while (len(self._specs) >= self.maxlen):
-                self._specs.popitem(last = False)
-        query_str = str.join(", ", query_list)
-        query_str = Symbol.sql_update(query_str)
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class DataStreamWS(StreamWS):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, name: str, on_message: Callable, url_args: dict, 
+                  on_ping: Callable = None, get_subs: Callable = None):
+
+        super().__init__(name, on_message, url_args, on_ping)
+        self.get_subs: Callable = get_subs
+    
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update(self, connector: DataConnector):
+        
+        Log.warning(f"WS for \"{self.name}\" channel loop started.")
+        
+        while connector.active:
+            await asyncio.sleep(1)
+            await self._WS_connected.wait()
+            if self._subs: await self.send_ping(True)
+
+            subs_new = set()
+            if (symbols := connector._symbols_new):
+                subs_new, payload_new = self.get_subs(symbols, True)
+            subs_old = set()
+            if (symbols := connector._symbols_old):
+                subs_old, payload_old = self.get_subs(symbols, False)
+
+            if (self._WS is None) or self._WS.closed:
+                self._subs.clear(); continue
+            if (not subs_old) and (not subs_new): continue
+            Log.info(self.verbose_subs(subs_old, subs_new))
+
+            try:
+                if subs_new:
+                    for payload in payload_new:
+                        await self._WS.send_json(payload)
+                    self._subs = self._subs | subs_new
+                    connector._symbols_new.clear()
+                    self._subs_known.set()
+                if subs_old:
+                    for payload in payload_old:
+                        await self._WS.send_json(payload)
+                    self._subs = self._subs - subs_old
+                    connector._symbols_old.clear()
+            except Exception as EXC:
+                Log.exception(self.VERBOSE_NOCONN.format(self.name, "sub"), EXC)
+
+#███████████████████████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class AccountConnectorWS(Connector, Venue):
+    SOURCE_FIELD: ClassVar[str] = "platform"
+    TABLE_ACCOUNTS: ClassVar[str] = "accounts"
+    CHANNEL_PATHS: ClassVar[dict[str, str]] = ...
+        
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @classmethod#█▄▄▄▄▄▄▄▄
+    def from_database(cls):
         with DB_ORM.connect() as conn:
-            conn.execute(TextClause(query_str))
-            conn.commit()
+            query = (f"SELECT iid, FROM {cls.TABLE_ACCOUNTS} WHERE "
+              f"({cls.SOURCE_FIELD} = '{cls.VENUE}') AND (execat >= 1);")
+            creds = dict.fromkeys(read_sql_query(query, conn)["iid"])
+            for iid in creds: creds[iid] = cls.Credentials(aid = iid,
+                **Vault.secrets.kv.v2.read_secret_version(mount_point = "creds",
+                    raise_on_deleted_version = True, path = iid)["data"]["data"])
+
+        return cls(creds.values())
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, *creds):
+        super().__init__()
+        Credentials = self.__class__.Credentials
+        self._streams = dict[str, AccountStreamWS]()
+        self._sockets = dict[str, ClientWebSocketResponse]()
+        for cred in creds:
+            if not isinstance(cred, Credentials): continue
+            for channel in self.CHANNEL_PATHS.keys():
+                name = f"{self.name}/{channel}/{cred.aid}"
+                stream = AccountStreamWS(name = name, 
+                    on_message = self.on_message, get_subs = self.get_subs(cred, channel),
+                      on_ping = self.on_ping, url_args = self.get_url_args(cred, channel))
+                self._streams[name] = stream.stream    
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def get_url_args(self, cred: Venue.Credentials, channel: str): ...
+    def get_subs(self, cred: Venue.Credentials, channel: str): ...
+    async def on_ping(self, sender: bool = False): ...
+    async def on_message(self, message: Any): ...
+    async def create_order(self, aid: str, order: Order): ...
+    async def cancel_order(self, aid: str, order_id: str): ...
+    async def modify_order(self, aid: str, order_id: str, order: Order): ...
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def sender(self, aid: str, payload: dict):
+        if (WS := self._sockets[aid]) is None: return
+        await WS.send_json(payload)
+
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class AccountStreamWS(StreamWS):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, name: str, on_message: Callable, url_args: dict,
+                  on_ping: Callable = None, get_subs: Callable = None):
+
+        super().__init__(name, on_message, url_args, on_ping)
+        self._WS: ClientWebSocketResponse = None
+        self.get_subs: Callable = get_subs
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update(self, connector: AccountConnectorWS):
+        
+        Log.warning(f"WS for \"{self.name}\" channel loop started.")
+        # TODO: Consider "keep-alive" method for all streams in dict, but only within Binance.
+        # Include "userDataStream" endpoint to get (and if needed, refresh) "ListenKey" token.
+
+                    
+#███████████████████████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

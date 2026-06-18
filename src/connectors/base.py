@@ -29,29 +29,32 @@ class Meta(type):
 class Venue(metaclass = Meta):
 
     VENUE: str = ...
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    class Credentials(NamedTuple): ...
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    class Credentials(NamedTuple): aid: str
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, creds: Credentials = None):
-
+        self.creds = self.auth_local(creds)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def auth_local(cls, creds: Credentials = None):
         vault_dict = dict[str, str]()
         creds_dict = dict[str, str]()
         if creds is not None:
             creds_dict = creds._asdict()
+            aid = creds_dict.pop("aid")
         for key, value in creds_dict.items():
             if not value:
                 if not vault_dict:
                     vault_dict = Vault.secrets.kv.v2.read_secret_version(
-                      path = self.VENUE, raise_on_deleted_version = True,
-                      mount_point = "creds")["data"]["data"]
+                        path = cls.VENUE, raise_on_deleted_version = True,
+                        mount_point = "creds")["data"]["data"][aid]
                 value = vault_dict.get(key, None)
                 if (value is None): value = getpass(
-                    f"\"{self.VENUE}\"; type \"{key}\": ")
+                    f"\"{aid}\"; type \"{key}\": ")
             assert isinstance(value, str) and (len(value) > 0), \
-                f"\"{self.VENUE}\"; invalid \"{key}\": \"{value}\""
+                f"\"{aid}\"; invalid \"{key}\": \"{value}\""
             creds_dict[key] = value
-
-        self.creds = self.Credentials(**creds_dict)
+        return cls.Credentials(aid = aid, **creds_dict)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update_timediff(self): ...
@@ -73,12 +76,13 @@ class Connector:
     name: str = field(init = False, kw_only = True, default = None)
     url_ws: str = field(init = False, kw_only = True, default = None)
     url_api: str = field(init = False, kw_only = True, default = None)
-    active: bool = field(init = False, kw_only = True, default = False)
     maxlen: int = field(init = False, kw_only = True, default = 10000)
+    active: bool = field(init = False, kw_only = True, default = False)
     last_written: Timestamp = field(init = False, kw_only = True, default = None)
     last_updated: Timestamp = field(init = False, kw_only = True, default = None)
-    symbols: set[str] = field(init = False, kw_only = True, default_factory = set)
 
+    TABLE_CONFIG: ClassVar[str] = ...
+    TABLE_SYMBOLS: ClassVar[str] = ...
     STREAM_PREFIX: ClassVar[str] = "LTX|DATA"
     VERBOSE_XADD_OK: ClassVar[str] = "[Q{}] \"{}\" XADD @ {} => {}"
     VERBOSE_XADD_ERROR: ClassVar[str] = "\"{}\" XADD failed:\n => {}"
@@ -87,7 +91,10 @@ class Connector:
         self.name = self.__class__.__name__
         self._streams = dict[str, object]()
         self._specs = OrderedDict[str, Symbol]()
+        self._tasks = dict[str, asyncio.Task]()
         self._crons = {self.reconfig: TimeFrame.S5}
+        self._symbols_new = set[str]()
+        self._sockets = dict[str, Any]()
         self._offset = Timedelta(0)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -105,69 +112,27 @@ class Connector:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def start(self):
         try:
-            self.active = True
             verbose_list = list[str]()
-            tasks = dict[str, asyncio.Task]()
             class_name = self.__class__.__name__
             for cron, tf in self._crons.items():
                 name = f"{class_name}/cron/{cron.__name__}:{tf!r}"
-                tasks[name] = asyncio.create_task(
+                self._tasks[name] = asyncio.create_task(
                     self.start_cron(cron, tf), name = name)
-                verbose_list.append(f" => {name}: {tasks[name]!r}")
+                verbose_list.append(f" => {name}: {self._tasks[name]!r}")
             await self.reconfig()
             name = f"{class_name}/writer"
-            tasks[name] = asyncio.create_task(self.writer(), name = name)
-            verbose_list.append(f" => {name}: {tasks[name]!r}")
+            self._tasks[name] = asyncio.create_task(self.writer(), name = name)
+            verbose_list.append(f" => {name}: {self._tasks[name]!r}")
             for name, stream in self._streams.items():
                 name = f"{class_name}/{name}"
-                tasks[name] = asyncio.create_task(stream(self), name = name)
-                verbose_list.append(f" => {name}: {tasks[name]!r}")
-            verbose = f"Starting {len(tasks)} tasks in \"{class_name}\":\n"
+                self._tasks[name] = asyncio.create_task(stream(self), name = name)
+                verbose_list.append(f" => {name}: {self._tasks[name]!r}")
+            verbose = f"Starting {len(self._tasks)} self._tasks in \"{class_name}\":\n"
             Log.info(verbose + str.join("\n", verbose_list))
-            await asyncio.gather(*tasks.values(), return_exceptions = True)
+            await asyncio.gather(*self._tasks.values(), return_exceptions = True)
         except KeyboardInterrupt: Log.success("Exiting...")
         except Exception as EXC: Log.exception(EXC)
         finally: self.active = False
-    
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def reconfig(self):
-        self._symbols_new = set[str]()
-        self._symbols_old = set[str]()
-        with DB_ORM.connect() as conn:
-            await self.update_config(conn)
-            await self.update_specs(conn)
-
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_config(self, conn: DBConn):
-        TABLE = "conns_data_config"
-        query = f"SELECT * FROM {TABLE} WHERE (name = '{self.VENUE}');"
-        result = dict[str, Any](read_sql_query(query, conn).iloc[0])
-        symbols_json = json.loads(result.pop("symbols"))
-        for key, value in result.items():
-            if (key == "name"): continue
-            setattr(self, key, value)
-            
-        self.last_updated = Timestamp.now("UTC")
-        for symbol, keep in dict.items(symbols_json):
-            available = (symbol in self.symbols)
-            if available and keep: continue
-            elif available and not keep:
-                self._symbols_old.add(symbol)
-                self.symbols.remove(symbol)
-            elif not available and keep:
-                self._symbols_new.add(symbol)
-                self.symbols.add(symbol)
-
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_specs(self, conn: DBConn):
-        if not self._symbols_new: return
-        TABLE = "symbol_specs"
-        query = f"SELECT * FROM {TABLE} WHERE (venue = '{self.VENUE}') AND (symbol IN ({{}}))"
-        query = query.format(str.join(", ", [f"'{symbol}'" for symbol in self._symbols_new]))
-        result = read_sql_query(query, conn).to_dict(orient = "records")
-        if not result: return Log.error(f"No specs found:\n => {query}")
-        for item in result: self._specs[item["symbol"]] = Symbol(**item)
-        while (len(self._specs) >= self.maxlen): self._specs.popitem(last = False)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def writer(self):
@@ -187,6 +152,87 @@ class Connector:
                     self.VERBOSE_XADD_ERROR.format(stream, payload), EXC)
                 if Config.DEBUG_MODE: Log.debug(
                     self.VERBOSE_XADD_OK.format(N, stream, id, payload))
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self): ...
+
+#███████████████████████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class DataConnector(Connector):    
+    symbols: set[str] = field(init = False, kw_only = True, default_factory = set)
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self):
+        with DB_ORM.connect() as conn:
+            symbols_json = await self.update_config(conn)
+            await self.update_symbols(symbols_json)
+            if not self._symbols_new: return
+            await self.update_specs(conn)
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update_config(self, conn: DBConn):
+        TABLE = self.TABLE_CONFIG
+        query = f"SELECT * FROM {TABLE} WHERE (name = '{self.VENUE}');"
+        result = dict[str, Any](read_sql_query(query, conn).iloc[0])
+        symbols_json = json.loads(result.pop("symbols"))
+        for key, value in result.items():
+            if (key == "name"): continue
+            setattr(self, key, value)
+        return symbols_json
+            
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update_symbols(self, from_config: dict):
+        self._symbols_new = set[str]()
+        self._symbols_old = set[str]()
+        self.last_updated = Timestamp.now("UTC")
+        for symbol, keep in from_config.items():
+            available = (symbol in self.symbols)
+            if available and keep: continue
+            elif available and not keep:
+                self._symbols_old.add(symbol)
+                self.symbols.remove(symbol)
+            elif not available and keep:
+                self._symbols_new.add(symbol)
+                self.symbols.add(symbol)
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update_specs(self, conn: DBConn):
+        TABLE, VENUE = self.TABLE_SYMBOLS, self.VENUE
+        query = f"SELECT * FROM {TABLE} WHERE (venue = '{VENUE}') AND (symbol IN ({{}}))"
+        query = query.format(str.join(", ", [f"'{symbol}'" for symbol in self._symbols_new]))
+        result = read_sql_query(query, conn).to_dict(orient = "records")
+        if not result: return Log.error(f"No specs found:\n => {query}")
+        for item in result: self._specs[item["symbol"]] = Symbol(**item)
+        while (len(self._specs) >= self.maxlen): self._specs.popitem(last = False)
+
+#███████████████████████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class AccountConnector(Connector):
+    
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __post_init__(self):
+        self._streams["listen-orders"] = self.__class__.listen_orders
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self): ...
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update_config(self, conn: DBConn): ...
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update_specs(self, conn: DBConn): ...
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def listen_orders(self):
+    # TODO: This thread should listen to Redis (DB_CCH), receiving messages from X-streams each
+    # time that a strategy's executor function uses XADD in the given channel name: "LTX|EXEC|{aid}"
+    # Then it shall locate the socket based on the account ID and use the its sender on the order payload.
+        aid = ...
+        payload = ...
+        asyncio.create_task(self.sender(aid, payload))
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def sender(self, aid: str, payload: dict): ...
+    # TODO: get payload from order-like request and send to exchange. Each "AccountConnector" subclass shall
+    # implement its own sender method, including its order-to-payload conversion, and its socket object.
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
