@@ -1,21 +1,19 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 import asyncio, json
-from numba.core.types import NoneType
 from pandas import Timestamp
 from dataclasses import dataclass, field
 from typing import Any, Any, Callable, List
 from aiohttp import WSMsgType, ClientSession
 from aiohttp import ClientWebSocketResponse
 from sqlalchemy.sql.lambdas import NullLambdaStatement
-from src.connectors.base import DataStream
-from src.connectors.base import Connector
+from src.connectors.base import Stream, Connector
 from src.models import *
 from src.utils import *
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class DataStreamWS(DataStream):
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class StreamWS(Stream):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, name: str, get_subs: Callable, on_message: Callable,
                        get_urlh: Callable = None, on_ping: Callable = None):
@@ -26,6 +24,8 @@ class DataStreamWS(DataStream):
         self.get_urlh: Callable = get_urlh
         self.on_message: Callable = on_message
         self._WS: ClientWebSocketResponse = None
+        self._WS_connected = asyncio.Event()
+        self._subs_known = asyncio.Event()
         self._subs = set[str]()
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -36,7 +36,9 @@ class DataStreamWS(DataStream):
             except Exception as EXC:
                 error = self.VERBOSE_NOCONN.format(self.name, 
                     "ping sent" if sender else "ping received")
-                Log.exception(error, EXC) ; self._subs.clear()
+                Log.exception(error, EXC)
+                self._subs_known.clear()
+                self._subs.clear()
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update(self, connector: Connector):
@@ -45,9 +47,8 @@ class DataStreamWS(DataStream):
         
         while connector.active:
             await asyncio.sleep(1)
-            if (self._WS is None) or self._WS.closed:
-                await asyncio.sleep(0.5); continue
-            elif self._subs: await self.send_ping(True)
+            await self._WS_connected.wait()
+            if self._subs: await self.send_ping(True)
 
             subs_new = list()
             if (symbols := connector._symbols_new):
@@ -67,6 +68,7 @@ class DataStreamWS(DataStream):
                         await self._WS.send_json(payload)
                     self._subs = self._subs | subs_new
                     connector._symbols_new.clear()
+                    self._subs_known.set()
                 if subs_old:
                     for payload in payload_old:
                         await self._WS.send_json(payload)
@@ -85,7 +87,8 @@ class DataStreamWS(DataStream):
                     Log.info(self.VERBOSE_RECONN.format(self.name, args["url"]))
                     async with session.ws_connect(**args, heartbeat = 30) as WS:
                         self._WS = WS
-                        while not self._subs: await asyncio.sleep(0.5)
+                        self._WS_connected.set()
+                        await self._subs_known.wait()
                         Log.info(self.VERBOSE_CONNED.format(self.name))
                         async for message in self._WS:
                             if (message.type == WSMsgType.TEXT):
@@ -109,7 +112,10 @@ class DataStreamWS(DataStream):
                 except Exception as EXC:
                     Log.exception(self.VERBOSE_ERROR.format(self.name), EXC)
                     self._subs.clear(); self._WS = None
-                    if connector.active: await asyncio.sleep(2)
+                    self._WS_connected.clear()
+                    self._subs_known.clear()
+                    if connector.active:
+                        await asyncio.sleep(2)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -118,7 +124,7 @@ class ConnectorWS(Connector):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, **streams):
         super().__init__()
-        stream: DataStreamWS
+        stream: StreamWS
         for stream in streams.values():
             self._streams[f"{stream.name}/stream"] = stream.stream
             self._streams[f"{stream.name}/update"] = stream.update
@@ -141,6 +147,3 @@ class ConnectorWS(Connector):
         with DB_ORM.connect() as conn:
             conn.execute(TextClause(query_str))
             conn.commit()
-
-#███████████████████████████████████████████████████████████████████████████████████████████████████████████
-#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
