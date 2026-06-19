@@ -1,17 +1,19 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import os, sys, json, requests
+import sys, json, requests
 from pathlib import Path
+from configparser import ConfigParser
 from pandas import Series, DataFrame
 from pandas import Timestamp, Timedelta
 from pandas import concat, to_datetime
+from sqlalchemy import create_engine, TextClause
 
 _ROOT = Path(__file__).resolve().parents[1]
-_SRC = _ROOT / "src"
-for _path in (_ROOT, _SRC, _SRC / "utils"):
-    if str(_path) not in sys.path:
-        sys.path.insert(0, str(_path))
-
-from src.utils import *
+_auth = ConfigParser()
+_auth.read(_ROOT / "auth.ini")
+_db = dict(_auth.items("DB_ORM"))
+DB_ORM = create_engine(
+    "postgresql://{username}:{password}@{ip}/{database}".format(**_db),
+    isolation_level = "AUTOCOMMIT")
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

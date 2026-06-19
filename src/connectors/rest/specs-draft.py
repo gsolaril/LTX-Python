@@ -13,9 +13,8 @@ async def update_specs(self):
             self._specs.popitem(last = False)
     query_str = str.join(", ", query_list)
     query_str = Symbol.sql_update(query_str)
-    with DB_ORM.connect() as conn:
-        conn.execute(TextClause(query_str))
-        conn.commit()
+    async with DB_ORM.acquire() as conn:
+        await conn.execute(query_str)
 """
 # from former Binance DataConnectorWS, specs' request    
 """

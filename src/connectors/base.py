@@ -1,10 +1,10 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import asyncio, json
+import asyncio, asyncpg, json
 from getpass import getpass
 from dataclasses import dataclass, field
-from pandas import Timestamp, Timedelta, read_sql_query
-from typing import Any, ClassVar, Callable, NamedTuple
-from sqlalchemy import Connection as DBConn, TextClause
+from pandas import Timestamp, Timedelta
+from typing import ClassVar, Callable
+from typing import Any, NamedTuple
 from collections import OrderedDict
 from src.models import *
 from src.utils import *
@@ -112,6 +112,7 @@ class Connector:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def start(self):
         try:
+            await init_db_orm()
             verbose_list = list[str]()
             class_name = self.__class__.__name__
             for cron, tf in self._crons.items():
@@ -155,29 +156,29 @@ class Connector:
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def reconfig(self):
-        with DB_ORM.connect() as conn:
+        async with DB_ORM.acquire() as conn:
             await self.update_config(conn)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_config(self, conn: DBConn):
+    async def update_config(self, conn: asyncpg.Connection):
         TABLE = self.TABLE_CONFIG
         fields = str.join(", ", self.__dataclass_fields__.keys())
         query = f"SELECT {fields} FROM {TABLE} WHERE (name = '{self.VENUE}');"
-        config = dict[str, Any](read_sql_query(query, conn).iloc[0])
+        config = dict[str, Any](await conn.fetchrow(query))
         for key, value in config.items():
             if (key == "name"): continue
             setattr(self, key, value)
         return config
         
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_specs(self, conn: DBConn, symbols: set = None):
+    async def update_specs(self, conn: asyncpg.Connection, symbols: set = None):
         TABLE, VENUE = self.TABLE_SYMBOLS, self.VENUE
         query = f"SELECT * FROM {TABLE} WHERE (venue = '{VENUE}')"
         if (symbols is not None) and (len(symbols) == 0): return
         elif symbols:
             symbols_str = str.join(", ", [f"'{S}'" for S in symbols])
             query = query + " AND (symbol IN ({}))".format(symbols_str)
-        result = read_sql_query(query, conn).to_dict(orient = "records")
+        result = [dict(row) for row in await conn.fetch(query)]
         if not result: return Log.error(f"No specs found:\n => {query}")
         for item in result: self._specs[item["symbol"]] = Symbol(**item)
         while (len(self._specs) >= self.maxlen): self._specs.popitem(last = False)
@@ -192,9 +193,8 @@ class DataConnector(Connector):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def reconfig(self):
-        with DB_ORM.connect() as conn:
-            config: dict = await self.update_config(conn)
-            symbols_config: dict = config.pop("symbols")
+        async with DB_ORM.acquire() as conn:
+            symbols_config: dict = await self.update_config(conn)
             self._symbols_new = set[str]()
             self._symbols_old = set[str]()
             for symbol, keep in symbols_config.items():
@@ -211,10 +211,10 @@ class DataConnector(Connector):
                 conn, self._symbols_new)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_config(self, conn: DBConn):
+    async def update_config(self, conn: asyncpg.Connection):
         TABLE = self.TABLE_CONFIG
         query = f"SELECT * FROM {TABLE} WHERE (name = '{self.VENUE}');"
-        result = dict[str, Any](read_sql_query(query, conn).iloc[0])
+        result = dict[str, Any](await conn.fetchrow(query))
         symbols_json = json.loads(result.pop("symbols"))
         self.last_updated = Timestamp.now("UTC")
         for key, value in result.items():

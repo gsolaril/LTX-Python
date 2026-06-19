@@ -1,7 +1,7 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import asyncio, json
+import asyncio, asyncpg, json
 from typing import Any, Callable, ClassVar
-from pandas import Timestamp, read_sql_query
+from pandas import Timestamp, Timedelta
 from aiohttp import WSMsgType, ClientSession
 from aiohttp import ClientWebSocketResponse
 from src.connectors.base import Venue, Stream, Connector
@@ -159,15 +159,23 @@ class ExecConnectorWS(ExecConnector):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄
     def from_database(cls):
-        with DB_ORM.connect() as conn:
-            query = (f"SELECT iid, FROM {cls.TABLE_ACCOUNTS} WHERE "
-              f"({cls.SOURCE_FIELD} = '{cls.VENUE}') AND (execat >= 1);")
-            creds = dict.fromkeys(read_sql_query(query, conn)["iid"])
-            for iid in creds: creds[iid] = cls.Credentials(aid = iid,
-                **Vault.secrets.kv.v2.read_secret_version(mount_point = "creds",
-                    raise_on_deleted_version = True, path = iid)["data"]["data"])
-
-        return cls(creds.values())
+        async def _load():
+            pool = await asyncpg.create_pool(DB_ORM_DSN)
+            try:
+                async with pool.acquire() as conn:
+                    query = (f"SELECT iid FROM {cls.TABLE_ACCOUNTS} WHERE "
+                      f"({cls.SOURCE_FIELD} = '{cls.VENUE}') AND (execat >= 1);")
+                    aids = [row["iid"] for row in await conn.fetch(query)]
+            finally:
+                await pool.close()
+            creds = dict.fromkeys(aids)
+            Credentials = getattr(cls, "Credentials", Venue.Credentials)
+            for aid in creds:
+                creds[aid] = Credentials(aid = aid,
+                    **Vault.secrets.kv.v2.read_secret_version(mount_point = "creds",
+                        raise_on_deleted_version = True, path = aid)["data"]["data"])
+            return cls(*creds.values())
+        return asyncio.run(_load())
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, *creds):
