@@ -5,7 +5,7 @@ from pandas import Timestamp, read_sql_query
 from aiohttp import WSMsgType, ClientSession
 from aiohttp import ClientWebSocketResponse
 from src.connectors.base import Venue, Stream, Connector
-from src.connectors.base import DataConnector, AccountConnector 
+from src.connectors.base import DataConnector, ExecConnector 
 from src.models import *
 from src.utils import *
 
@@ -140,12 +140,24 @@ class DataStreamWS(StreamWS):
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class ExecStreamWS(StreamWS):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, name: str, on_message: Callable, url_args: dict,
+                  on_ping: Callable = None, get_subs: Callable = None):
+
+        super().__init__(name, on_message, url_args, on_ping)
+        self._WS: ClientWebSocketResponse = None
+        self.get_subs: Callable = get_subs
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update(self, connector: ExecConnectorWS): ...
+
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class AccountConnectorWS(Connector, Venue):
+class ExecConnectorWS(ExecConnector, Venue):
     SOURCE_FIELD: ClassVar[str] = "platform"
     TABLE_ACCOUNTS: ClassVar[str] = "accounts"
-    CHANNEL_PATHS: ClassVar[dict[str, str]] = ...
-        
+    
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄
     def from_database(cls):
@@ -163,16 +175,22 @@ class AccountConnectorWS(Connector, Venue):
     def __init__(self, *creds):
         super().__init__()
         Credentials = self.__class__.Credentials
-        self._streams = dict[str, AccountStreamWS]()
+        self._streams = dict[str, ExecStreamWS]()
         self._sockets = dict[str, ClientWebSocketResponse]()
+        cred: Venue.Credentials = None
         for cred in creds:
+            name_gen = f"{self.name}/{{channel}}/{cred.aid}"
             if not isinstance(cred, Credentials): continue
-            for channel in self.CHANNEL_PATHS.keys():
-                name = f"{self.name}/{channel}/{cred.aid}"
-                stream = AccountStreamWS(name = name, 
-                    on_message = self.on_message, get_subs = self.get_subs(cred, channel),
-                      on_ping = self.on_ping, url_args = self.get_url_args(cred, channel))
-                self._streams[name] = stream.stream    
+            stream = ExecStreamWS(name := name_gen.format(channel := "account"), 
+                on_message = self.on_message, get_subs = self.get_subs(cred, channel),
+                  on_ping = self.on_ping, url_args = self.get_url_args(cred, channel))
+            self._streams[name] = stream.stream
+            stream = ExecStreamWS(name := name_gen.format(channel := "exec"),
+                on_message = self.on_message, get_subs = self.get_subs(cred, channel),
+                  on_ping = self.on_ping, url_args = self.get_url_args(cred, channel))
+            self._streams[name] = stream.stream
+            self._sockets[cred.aid] = stream._WS
+
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def get_url_args(self, cred: Venue.Credentials, channel: str): ...
     def get_subs(self, cred: Venue.Credentials, channel: str): ...
@@ -185,24 +203,6 @@ class AccountConnectorWS(Connector, Venue):
     async def sender(self, aid: str, payload: dict):
         if (WS := self._sockets[aid]) is None: return
         await WS.send_json(payload)
-
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class AccountStreamWS(StreamWS):
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __init__(self, name: str, on_message: Callable, url_args: dict,
-                  on_ping: Callable = None, get_subs: Callable = None):
-
-        super().__init__(name, on_message, url_args, on_ping)
-        self._WS: ClientWebSocketResponse = None
-        self.get_subs: Callable = get_subs
-
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update(self, connector: AccountConnectorWS):
-        
-        Log.warning(f"WS for \"{self.name}\" channel loop started.")
-        # TODO: Consider "keep-alive" method for all streams in dict, but only within Binance.
-        # Include "userDataStream" endpoint to get (and if needed, refresh) "ListenKey" token.
-
                     
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

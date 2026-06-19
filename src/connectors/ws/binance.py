@@ -6,7 +6,7 @@ from aiohttp import ClientSession
 from aiohttp import ClientWebSocketResponse
 from typing import Any, List, Dict, NamedTuple
 from .base import DataConnectorWS, DataStreamWS
-from .base import AccountConnectorWS, ExecStreamWS
+from .base import ExecConnectorWS, ExecStreamWS
 from src.connectors.base import Venue
 from src.models import *
 from src.utils import *
@@ -101,7 +101,7 @@ class DataBinance(DataConnectorWS, Binance):
             on_ping = self.on_ping, get_urlh = self.get_url_headers_klines))
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def get_urlh(self, path: str): return {"url": self.url_ws + "/" + path} 
+    async def get_urlh(self, path: str): return {"url": self.url + "/" + path} 
     async def get_url_headers_ticks(self): return await self.get_urlh(self.STREAM_PATH_TICK)
     async def get_url_headers_klines(self): return await self.get_urlh(self.STREAM_PATH_KLINE)
 

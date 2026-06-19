@@ -74,16 +74,15 @@ class Venue(metaclass = Meta):
 @dataclass#█▄▄▄
 class Connector:
     name: str = field(init = False, kw_only = True, default = None)
-    url_ws: str = field(init = False, kw_only = True, default = None)
-    url_api: str = field(init = False, kw_only = True, default = None)
+    url: str = field(init = False, kw_only = True, default = None)
     maxlen: int = field(init = False, kw_only = True, default = 10000)
     active: bool = field(init = False, kw_only = True, default = False)
     last_written: Timestamp = field(init = False, kw_only = True, default = None)
     last_updated: Timestamp = field(init = False, kw_only = True, default = None)
 
-    TABLE_CONFIG: ClassVar[str] = ...
+    STREAM_PREFIX: ClassVar[str] = ...
     TABLE_SYMBOLS: ClassVar[str] = ...
-    STREAM_PREFIX: ClassVar[str] = "LTX|DATA"
+    TABLE_CONFIG: ClassVar[str] = "connector_config"
     VERBOSE_XADD_OK: ClassVar[str] = "[Q{}] \"{}\" XADD @ {} => {}"
     VERBOSE_XADD_ERROR: ClassVar[str] = "\"{}\" XADD failed:\n => {}"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -154,53 +153,29 @@ class Connector:
                     self.VERBOSE_XADD_OK.format(N, stream, id, payload))
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def reconfig(self): ...
-
-#███████████████████████████████████████████████████████████████████████████████████████████████████████████
-#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class DataConnector(Connector):    
-    symbols: set[str] = field(init = False, kw_only = True, default_factory = set)
-
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def reconfig(self):
         with DB_ORM.connect() as conn:
-            symbols_json = await self.update_config(conn)
-            await self.update_symbols(symbols_json)
-            if not self._symbols_new: return
-            await self.update_specs(conn)
+            await self.update_config(conn)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update_config(self, conn: DBConn):
         TABLE = self.TABLE_CONFIG
-        query = f"SELECT * FROM {TABLE} WHERE (name = '{self.VENUE}');"
-        result = dict[str, Any](read_sql_query(query, conn).iloc[0])
-        symbols_json = json.loads(result.pop("symbols"))
-        for key, value in result.items():
+        fields = str.join(", ", self.__dataclass_fields__.keys())
+        query = f"SELECT {fields} FROM {TABLE} WHERE (name = '{self.VENUE}');"
+        config = dict[str, Any](read_sql_query(query, conn).iloc[0])
+        for key, value in config.items():
             if (key == "name"): continue
             setattr(self, key, value)
-        return symbols_json
-            
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_symbols(self, from_config: dict):
-        self._symbols_new = set[str]()
-        self._symbols_old = set[str]()
-        self.last_updated = Timestamp.now("UTC")
-        for symbol, keep in from_config.items():
-            available = (symbol in self.symbols)
-            if available and keep: continue
-            elif available and not keep:
-                self._symbols_old.add(symbol)
-                self.symbols.remove(symbol)
-            elif not available and keep:
-                self._symbols_new.add(symbol)
-                self.symbols.add(symbol)
-
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_specs(self, conn: DBConn):
+        return config
+        
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update_specs(self, conn: DBConn, symbols: set = None):
         TABLE, VENUE = self.TABLE_SYMBOLS, self.VENUE
-        query = f"SELECT * FROM {TABLE} WHERE (venue = '{VENUE}') AND (symbol IN ({{}}))"
-        query = query.format(str.join(", ", [f"'{symbol}'" for symbol in self._symbols_new]))
+        query = f"SELECT * FROM {TABLE} WHERE (venue = '{VENUE}')"
+        if (symbols is not None) and (len(symbols) == 0): return
+        elif symbols:
+            symbols_str = str.join(", ", [f"'{S}'" for S in symbols])
+            query = query + " AND (symbol IN ({}))".format(symbols_str)
         result = read_sql_query(query, conn).to_dict(orient = "records")
         if not result: return Log.error(f"No specs found:\n => {query}")
         for item in result: self._specs[item["symbol"]] = Symbol(**item)
@@ -208,27 +183,78 @@ class DataConnector(Connector):
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class AccountConnector(Connector):
-    
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __post_init__(self):
-        self._streams["listen-orders"] = self.__class__.listen_orders
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class DataConnector(Connector):
+    symbols: set[str] = field(init = False,
+      kw_only = True, default_factory = set)
+    STREAM_PREFIX: ClassVar[str] = "LTX|DATA"
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def reconfig(self): ...
+    async def reconfig(self):
+        with DB_ORM.connect() as conn:
+            config: dict = await self.update_config(conn)
+            symbols_config: dict = config.pop("symbols")
+            self._symbols_new = set[str]()
+            self._symbols_old = set[str]()
+            for symbol, keep in symbols_config.items():
+                available = (symbol in self.symbols)
+                if available and keep: continue
+                elif available and not keep:
+                    self._symbols_old.add(symbol)
+                    self.symbols.remove(symbol)
+                elif not available and keep:
+                    self._symbols_new.add(symbol)
+                    self.symbols.add(symbol)
+
+            await self.update_specs(
+                conn, self._symbols_new)
+
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_config(self, conn: DBConn): ...
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_specs(self, conn: DBConn): ...
+    async def update_config(self, conn: DBConn):
+        TABLE = self.TABLE_CONFIG
+        query = f"SELECT * FROM {TABLE} WHERE (name = '{self.VENUE}');"
+        result = dict[str, Any](read_sql_query(query, conn).iloc[0])
+        symbols_json = json.loads(result.pop("symbols"))
+        self.last_updated = Timestamp.now("UTC")
+        for key, value in result.items():
+            if (key == "name"): continue
+            setattr(self, key, value)
+        return symbols_json
+
+#███████████████████████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class ExecConnector(Connector):
+    STREAM_PREFIX: ClassVar[str] = "LTX|EXEC"
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __post_init__(self):
+        self._crons[self.update_specs] = TimeFrame.D1
+        listen_orders = self.__class__.listen_orders
+        name = f"{self.name}/listen_orders"
+        self._streams[name] = listen_orders
+
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def listen_orders(self):
-    # TODO: This thread should listen to Redis (DB_CCH), receiving messages from X-streams each
-    # time that a strategy's executor function uses XADD in the given channel name: "LTX|EXEC|{aid}"
-    # Then it shall locate the socket based on the account ID and use the its sender on the order payload.
-        aid = ...
-        payload = ...
-        asyncio.create_task(self.sender(aid, payload))
+    async def listen_orders(self):        
+        xstreams = dict[str, str]()
+        for account_id in self._sockets.keys():
+            xname = self.STREAM_PREFIX + "|" + account_id
+            xstreams[xname] = "0-0"
+
+        while self.active:
+            account_id = "N/A"
+            try:
+                response = await DB_CCH.xread(
+                  streams = xstreams, count = 1)
+                if not response: continue
+                for stream, messages in response:
+                    account_id = stream.split("|")[-1]
+                    for message_id, payload in messages:
+                        xstreams[account_id] = message_id
+                        await self.sender(account_id, payload)
+            except asyncio.CancelledError: break
+            except Exception as EXC: Log.exception(f"\"{self.name}\" "
+                    f"order listener failure @ \"{account_id}\"", EXC)
+
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def sender(self, aid: str, payload: dict): ...
     # TODO: get payload from order-like request and send to exchange. Each "AccountConnector" subclass shall
