@@ -171,11 +171,11 @@ class ExecBinance(ExecConnectorWS, Binance):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def get_url_args(self, cred: Binance.Credentials, channel: str):
         # TODO: implement for Binance based on Binance API docs
-        return dict()
+        return {"url": ..., "headers": ...}
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def get_subs(self, cred: Binance.Credentials, channel: str):
         # TODO: implement for Binance based on Binance API docs
-        return dict()
+        return {"id": 1, "params": ..., "method": ...}
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_ping(self, WS: ClientWebSocketResponse, sender: bool = False):
         if not sender: return await WS.send_str("pong")
@@ -185,16 +185,16 @@ class ExecBinance(ExecConnectorWS, Binance):
         return Balance(...)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def create_order(self, aid: str, order: Order):
-        payload = ... # TODO: implement for Binance based on Binance API docs
-        self.sender(aid, payload)
+        # TODO: implement for Binance based on Binance API docs
+        self.sender(aid, ...)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def cancel_order(self, aid: str, order_id: str):
-        payload = ... # TODO: implement for Binance based on Binance API docs
-        self.sender(aid, payload)
+        # TODO: implement for Binance based on Binance API docs
+        self.sender(aid, ...)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def modify_order(self, aid: str, order_id: str, order: Order):
-        payload = ... # TODO: implement for Binance based on Binance API docs
-        self.sender(aid, payload)
+        # TODO: implement for Binance based on Binance API docs
+        self.sender(aid, ...)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
