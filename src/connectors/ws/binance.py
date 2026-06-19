@@ -162,7 +162,6 @@ class DataBinance(DataConnectorWS, Binance):
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class ExecBinance(ExecConnectorWS, Binance):
-     # TODO: implement for Binance based on Binance API docs
 
     STREAM_PATH_ACCOUNT: ClassVar[str] = ...
     STREAM_PATH_EXEC: ClassVar[str] = ...
@@ -170,13 +169,32 @@ class ExecBinance(ExecConnectorWS, Binance):
     CHANNEL_KEY_EXEC: ClassVar[str] = ...
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def get_url_args(self, cred: Binance.Credentials, channel: str): ...
-    def get_subs(self, cred: Binance.Credentials, channel: str): ...
-    async def on_ping(self, sender: bool = False): ...
-    async def on_message(self, message: Any): ...
-    async def create_order(self, aid: str, order: Order): ...
-    async def cancel_order(self, aid: str, order_id: str): ...
-    async def modify_order(self, aid: str, order_id: str, order: Order): ...
+    def get_url_args(self, cred: Binance.Credentials, channel: str):
+        # TODO: implement for Binance based on Binance API docs
+        return dict()
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def get_subs(self, cred: Binance.Credentials, channel: str):
+        # TODO: implement for Binance based on Binance API docs
+        return dict()
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def on_ping(self, WS: ClientWebSocketResponse, sender: bool = False):
+        if not sender: return await WS.send_str("pong")
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def on_message(self, message: Dict):
+        # TODO: implement for Binance based on Binance API docs
+        return Balance(...)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def create_order(self, aid: str, order: Order):
+        payload = ... # TODO: implement for Binance based on Binance API docs
+        self.sender(aid, payload)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def cancel_order(self, aid: str, order_id: str):
+        payload = ... # TODO: implement for Binance based on Binance API docs
+        self.sender(aid, payload)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def modify_order(self, aid: str, order_id: str, order: Order):
+        payload = ... # TODO: implement for Binance based on Binance API docs
+        self.sender(aid, payload)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
