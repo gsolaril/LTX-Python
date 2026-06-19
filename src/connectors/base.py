@@ -80,6 +80,7 @@ class Connector:
     last_written: Timestamp = field(init = False, kw_only = True, default = None)
     last_updated: Timestamp = field(init = False, kw_only = True, default = None)
 
+    VENUE: ClassVar[str] = ...
     STREAM_PREFIX: ClassVar[str] = ...
     TABLE_SYMBOLS: ClassVar[str] = ...
     TABLE_CONFIG: ClassVar[str] = "connector_config"
@@ -273,7 +274,7 @@ class Stream:
     VERBOSE_WDTYPE = "\"{}\" weird type: \"{}\""
     VERBOSE_NOJSON = "\"{}\" got non-JSON: \"{}\""
     VERBOSE_ERROR = "\"{}\" error"
-    VERBOSE_ERROR_XADD = "\"{}\" XADD failed:\n => {}"
+    VERBOSE_ERROR_XADD = "\"{}\" XADD failed:" + BULLET
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, name: str): self.name = name
@@ -285,8 +286,8 @@ class Stream:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def verbose_subs(self, old: set, new: set):
         verbose = f"\"{self.name}\", reviewing subs..."
-        if new: verbose += "\n => New (subscribing to):"
+        if new: verbose += self.BULLET + "New (subs to):"
         for sub in sorted(new): verbose += self.BULLET + sub
-        if old: verbose += "\n => Old (unsubscribing from):"
+        if old: verbose += self.BULLET + "Old (unsubs from):"
         for sub in sorted(old): verbose += self.BULLET + sub
         return verbose

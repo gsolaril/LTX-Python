@@ -4,7 +4,7 @@ from pandas import Timestamp
 from urllib.parse import urlencode
 from aiohttp import ClientSession
 from aiohttp import ClientWebSocketResponse
-from typing import Any, List, Dict, NamedTuple
+from typing import Any, List, Dict, ClassVar
 from .base import DataConnectorWS, DataStreamWS
 from .base import ExecConnectorWS, ExecStreamWS
 from src.connectors.base import Venue
@@ -16,8 +16,6 @@ from src.utils import *
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class Binance(Venue):
 
-    URL_WS = ...
-    URL_API = ...
     STATUS = {"NEW": "OK", "FILLED": "OK", "CANCELED": "OK", "PARTIALLY_FILLED": "OK"}
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class Credentials(Venue.Credentials): api_key: str; secret: str
@@ -84,12 +82,12 @@ class Binance(Venue):
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataBinance(DataConnectorWS, Binance):
 
-    STREAM_PATH_TICK = ...
-    STREAM_PATH_KLINE = ...
-    CHANNEL_KEY_TICK = ...
-    CHANNEL_KEY_KLINE = ...
-    KLINE_EVENT = ...
-    SYMBOL_KEY_KLINE = "ps"
+    STREAM_PATH_TICK: ClassVar[str] = ...
+    STREAM_PATH_KLINE: ClassVar[str] = ...
+    CHANNEL_KEY_TICK: ClassVar[str] = ...
+    CHANNEL_KEY_KLINE: ClassVar[str] = ...
+    SYMBOL_KEY_KLINE: ClassVar[str] = "ps"
+    KLINE_EVENT: ClassVar[str] = ...
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self): super().__init__(
@@ -162,13 +160,28 @@ class DataBinance(DataConnectorWS, Binance):
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class ExecBinance(ExecConnectorWS, Binance):
+     # TODO: implement for Binance based on Binance API docs
+
+    STREAM_PATH_ACCOUNT: ClassVar[str] = ...
+    STREAM_PATH_EXEC: ClassVar[str] = ...
+    CHANNEL_KEY_ACCOUNT: ClassVar[str] = ...
+    CHANNEL_KEY_EXEC: ClassVar[str] = ...
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def get_url_args(self, cred: Binance.Credentials, channel: str): ...
+    def get_subs(self, cred: Binance.Credentials, channel: str): ...
+    async def on_ping(self, sender: bool = False): ...
+    async def on_message(self, message: Any): ...
+    async def create_order(self, aid: str, order: Order): ...
+    async def cancel_order(self, aid: str, order_id: str): ...
+    async def modify_order(self, aid: str, order_id: str, order: Order): ...
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class BinanceCoin(Binance):
-    URL_WS = "wss://dstream.binance.com"
-    URL_API = "https://dapi.binance.com/dapi/v1"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def symbol_to_local(cls, symbol: str): return symbol.upper()
@@ -178,19 +191,17 @@ class BinanceCoin(Binance):
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataBinanceCoin(DataBinance, BinanceCoin):
-    STREAM_PATH_TICK = "public/stream"
-    STREAM_PATH_KLINE = "market/stream"
-    CHANNEL_KEY_TICK = "@bookTicker"
-    CHANNEL_KEY_KLINE = "@continuousKline_1s"
-    EVENT_KLINE = "continuous_kline"
-    SYMBOL_KEY_KLINE = "ps"
+    STREAM_PATH_TICK: ClassVar[str] = "public/stream"
+    STREAM_PATH_KLINE: ClassVar[str] = "market/stream"
+    CHANNEL_KEY_TICK: ClassVar[str] = "@bookTicker"
+    CHANNEL_KEY_KLINE: ClassVar[str] = "@continuousKline_1s"
+    SYMBOL_KEY_KLINE: ClassVar[str] = "ps"
+    EVENT_KLINE: ClassVar[str] = "continuous_kline"
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class BinanceSpot(Binance):
-    URL_WS = "wss://stream.binance.com:9443"
-    URL_API = "https://api.binance.com/api/v3"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def symbol_to_local(cls, symbol: str): return symbol
@@ -200,19 +211,17 @@ class BinanceSpot(Binance):
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataBinanceSpot(DataBinance, BinanceSpot):
-    STREAM_PATH_TICK = "stream"
-    STREAM_PATH_KLINE = "stream"
-    CHANNEL_KEY_TICK = "@bookTicker"
-    CHANNEL_KEY_KLINE = "@kline_1s"
-    EVENT_KLINE = "kline"
-    SYMBOL_KEY_KLINE = "s"
+    STREAM_PATH_TICK: ClassVar[str] = "stream"
+    STREAM_PATH_KLINE: ClassVar[str] = "stream"
+    CHANNEL_KEY_TICK: ClassVar[str] = "@bookTicker"
+    CHANNEL_KEY_KLINE: ClassVar[str] = "@kline_1s"
+    SYMBOL_KEY_KLINE: ClassVar[str] = "s"
+    EVENT_KLINE: ClassVar[str] = "kline"
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class BinanceUsdm(Binance):
-    URL_WS = "wss://fstream.binance.com"
-    URL_API = "https://fapi.binance.com/fapi/v1"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def symbol_to_local(cls, symbol: str): return symbol.upper()
@@ -222,12 +231,12 @@ class BinanceUsdm(Binance):
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataBinanceUsdm(DataBinance, BinanceUsdm):
-    STREAM_PATH_TICK = "public/stream"
-    STREAM_PATH_KLINE = "market/stream"
-    CHANNEL_KEY_TICK = "@bookTicker"
-    CHANNEL_KEY_KLINE = "_perpetual@continuousKline_1s"
-    EVENT_KLINE = "continuous_kline"
-    SYMBOL_KEY_KLINE = "ps"
+    STREAM_PATH_TICK: ClassVar[str] = "public/stream"
+    STREAM_PATH_KLINE: ClassVar[str] = "market/stream"
+    CHANNEL_KEY_TICK: ClassVar[str] = "@bookTicker"
+    CHANNEL_KEY_KLINE: ClassVar[str] = "_perpetual@continuousKline_1s"
+    SYMBOL_KEY_KLINE: ClassVar[str] = "ps"
+    EVENT_KLINE: ClassVar[str] = "continuous_kline"
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

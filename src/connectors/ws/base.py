@@ -39,8 +39,6 @@ class StreamWS(Stream):
                 self._subs.clear()
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update(self, connector: Connector): ...
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def stream(self, connector: Connector):
 
         async with ClientSession() as session:
@@ -153,8 +151,8 @@ class ExecStreamWS(StreamWS):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update(self, connector: ExecConnectorWS): ...
 
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class ExecConnectorWS(ExecConnector, Venue):
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class ExecConnectorWS(ExecConnector):
     SOURCE_FIELD: ClassVar[str] = "platform"
     TABLE_ACCOUNTS: ClassVar[str] = "accounts"
     
@@ -174,10 +172,12 @@ class ExecConnectorWS(ExecConnector, Venue):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, *creds):
         super().__init__()
-        Credentials = self.__class__.Credentials
+        stream: ExecStreamWS
+        cred: Venue.Credentials = None
         self._streams = dict[str, ExecStreamWS]()
         self._sockets = dict[str, ClientWebSocketResponse]()
-        cred: Venue.Credentials = None
+        Credentials = getattr(self.__class__, "Credentials",
+            Venue.Credentials)
         for cred in creds:
             name_gen = f"{self.name}/{{channel}}/{cred.aid}"
             if not isinstance(cred, Credentials): continue
