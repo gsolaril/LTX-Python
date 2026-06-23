@@ -154,27 +154,6 @@ class ExecStreamWS(StreamWS):
 class ExecConnectorWS(ExecConnector):
     SOURCE_FIELD: ClassVar[str] = "platform"
     TABLE_ACCOUNTS: ClassVar[str] = "accounts"
-    
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @classmethod#█▄▄▄▄▄▄▄▄
-    def from_database(cls):
-        async def _load():
-            pool = await asyncpg.create_pool(DB_ORM_DSN)
-            try:
-                async with pool.acquire() as conn:
-                    query = (f"SELECT iid FROM {cls.TABLE_ACCOUNTS} WHERE "
-                      f"({cls.SOURCE_FIELD} = '{cls.VENUE}') AND (execat >= 1);")
-                    aids = [row["iid"] for row in await conn.fetch(query)]
-            finally:
-                await pool.close()
-            creds = dict.fromkeys(aids)
-            Credentials = getattr(cls, "Credentials", Venue.Credentials)
-            for aid in creds:
-                creds[aid] = Credentials(aid = aid,
-                    **Vault.secrets.kv.v2.read_secret_version(mount_point = "creds",
-                        raise_on_deleted_version = True, path = aid)["data"]["data"])
-            return cls(*creds.values())
-        return Meta.run(_load())
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, *creds):
