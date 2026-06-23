@@ -3,7 +3,7 @@ import asyncio, asyncpg, json
 from getpass import getpass
 from dataclasses import dataclass, field
 from pandas import Timestamp, Timedelta
-from typing import ClassVar, Callable
+from typing import Any, ClassVar, Callable
 from typing import Any, NamedTuple
 from collections import OrderedDict
 from src.models import *
@@ -82,8 +82,8 @@ class Connector:
 
     VENUE: ClassVar[str] = ...
     STREAM_PREFIX: ClassVar[str] = ...
-    TABLE_SYMBOLS: ClassVar[str] = ...
-    TABLE_CONFIG: ClassVar[str] = "connector_config"
+    TABLE_CONFIG: ClassVar[str] = "connectors"
+    TABLE_SYMBOLS: ClassVar[str] = "symbol_specs"
     VERBOSE_XADD_OK: ClassVar[str] = "[Q{}] \"{}\" XADD @ {} => {}"
     VERBOSE_XADD_ERROR: ClassVar[str] = "\"{}\" XADD failed:\n => {}"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -92,7 +92,7 @@ class Connector:
         self._streams = dict[str, object]()
         self._specs = OrderedDict[str, Symbol]()
         self._tasks = dict[str, asyncio.Task]()
-        self._crons = {self.reconfig: TimeFrame.S5}
+        self._crons = dict[Callable, TimeFrame]()
         self._symbols_new = set[str]()
         self._sockets = dict[str, Any]()
         self._offset = Timedelta(0)
@@ -112,25 +112,34 @@ class Connector:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def start(self):
         try:
-            await init_db_orm()
+            DBListener.bind(self)
             verbose_list = list[str]()
             class_name = self.__class__.__name__
+
+            name = f"{class_name}/Postgres/listener"
+            self._tasks[name] = asyncio.create_task(DBListener(), name = name)
+            verbose_list.append(f" => {name}: {self._tasks[name]!r}")
+            await DBListener.wait()
+            name = f"{class_name}/Redis/writer"
+            self._tasks[name] = asyncio.create_task(self.writer(), name = name)
+            verbose_list.append(f" => {name}: {self._tasks[name]!r}")
+
             for cron, tf in self._crons.items():
                 name = f"{class_name}/cron/{cron.__name__}:{tf!r}"
                 self._tasks[name] = asyncio.create_task(
                     self.start_cron(cron, tf), name = name)
                 verbose_list.append(f" => {name}: {self._tasks[name]!r}")
-            await self.reconfig()
-            name = f"{class_name}/writer"
-            self._tasks[name] = asyncio.create_task(self.writer(), name = name)
-            verbose_list.append(f" => {name}: {self._tasks[name]!r}")
+
             for name, stream in self._streams.items():
                 name = f"{class_name}/{name}"
                 self._tasks[name] = asyncio.create_task(stream(self), name = name)
                 verbose_list.append(f" => {name}: {self._tasks[name]!r}")
-            verbose = f"Starting {len(self._tasks)} self._tasks in \"{class_name}\":\n"
+            verbose = f"Starting {len(self._tasks)} tasks in \"{class_name}\":\n"
             Log.info(verbose + str.join("\n", verbose_list))
-            await asyncio.gather(*self._tasks.values(), return_exceptions = True)
+            results = await asyncio.gather(*self._tasks.values(), return_exceptions = True)
+            for result in results:
+                if (result is not None): raise result
+        
         except KeyboardInterrupt: Log.success("Exiting...")
         except Exception as EXC: Log.exception(EXC)
         finally: self.active = False
@@ -146,20 +155,21 @@ class Connector:
                 suffix, time_us, payload = point.as_cache
                 stream = self.STREAM_PREFIX + "|" + suffix
                 id = str(time_us)[: -3] + "-" + str(time_us)[-3:]
-                if not await DB_CCH.exists(stream): await DB_CCH.xgroup_create(
+                if not await Redis.exists(stream): await Redis.xgroup_create(
                       name = stream, groupname = stream, id = "$", mkstream = True)
-                try: assert (await DB_CCH.xadd(stream, payload, id, int(self.maxlen)))
+                try: assert (await Redis.xadd(stream, payload, id, int(self.maxlen)))
                 except Exception as EXC: Log.error(
                     self.VERBOSE_XADD_ERROR.format(stream, payload), EXC)
                 if Config.DEBUG_MODE: Log.debug(
                     self.VERBOSE_XADD_OK.format(N, stream, id, payload))
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def reconfig(self):
-        async with DB_ORM.acquire() as conn:
-            await self.update_config(conn)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @DBListener.on_table(TABLE_CONFIG)
+    async def reconfig(self, conn):
+        await self.update_config(conn)
+        await self.update_specs(conn)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update_config(self, conn: asyncpg.Connection):
         TABLE = self.TABLE_CONFIG
         fields = str.join(", ", self.__dataclass_fields__.keys())
@@ -169,13 +179,13 @@ class Connector:
             if (key == "name"): continue
             setattr(self, key, value)
         return config
-        
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update_specs(self, conn: asyncpg.Connection, symbols: set = None):
         TABLE, VENUE = self.TABLE_SYMBOLS, self.VENUE
         query = f"SELECT * FROM {TABLE} WHERE (venue = '{VENUE}')"
-        if (symbols is not None) and (len(symbols) == 0): return
-        elif symbols:
+        if (symbols is None): symbols = set(self._specs)
+        if (len(symbols) > 0): 
             symbols_str = str.join(", ", [f"'{S}'" for S in symbols])
             query = query + " AND (symbol IN ({}))".format(symbols_str)
         result = [dict(row) for row in await conn.fetch(query)]
@@ -185,37 +195,43 @@ class Connector:
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+#▄▄▄▄▄▄▄▄▄▄▄
+@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataConnector(Connector):
     symbols: set[str] = field(init = False,
       kw_only = True, default_factory = set)
     STREAM_PREFIX: ClassVar[str] = "LTX|DATA"
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def reconfig(self):
-        async with DB_ORM.acquire() as conn:
-            symbols_config: dict = await self.update_config(conn)
-            self._symbols_new = set[str]()
-            self._symbols_old = set[str]()
-            for symbol, keep in symbols_config.items():
-                available = (symbol in self.symbols)
-                if available and keep: continue
-                elif available and not keep:
-                    self._symbols_old.add(symbol)
-                    self.symbols.remove(symbol)
-                elif not available and keep:
-                    self._symbols_new.add(symbol)
-                    self.symbols.add(symbol)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @DBListener.on_table(Connector.TABLE_CONFIG)
+    async def reconfig(self, conn: asyncpg.Connection):
+        symbols_config = await self.update_config(conn)
+        self._symbols_new = set[str]()
+        self._symbols_old = set[str]()
+        for symbol, keep in symbols_config.items():
+            available = (symbol in self.symbols)
+            if available and keep: continue
+            elif available and not keep:
+                self._symbols_old.add(symbol)
+                self.symbols.remove(symbol)
+            elif not available and keep:
+                self._symbols_new.add(symbol)
+                self.symbols.add(symbol)
 
-            await self.update_specs(
-                conn, self._symbols_new)
+        await self.update_specs(conn, self.symbols)
+        verbose = f"Config for \"{self.VENUE}\" updated:"
+        for field in self.__dataclass_fields__.keys():
+            if field[0].isupper(): continue
+            value = getattr(self, field)
+            verbose += f"\n => \"{field}\": {value!r}"
+        Log.info(verbose)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update_config(self, conn: asyncpg.Connection):
         TABLE = self.TABLE_CONFIG
         query = f"SELECT * FROM {TABLE} WHERE (name = '{self.VENUE}');"
-        result = dict[str, Any](await conn.fetchrow(query))
-        symbols_json = json.loads(result.pop("symbols"))
+        result: dict = dict[str, Any](await conn.fetchrow(query))
+        symbols_json: dict = json.loads(result.pop("symbols"))
         self.last_updated = Timestamp.now("UTC")
         for key, value in result.items():
             if (key == "name"): continue
@@ -224,11 +240,13 @@ class DataConnector(Connector):
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+#▄▄▄▄▄▄▄▄▄▄▄
+@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class ExecConnector(Connector):
     STREAM_PREFIX: ClassVar[str] = "LTX|EXEC"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
+        super().__post_init__()
         self._crons[self.update_specs] = TimeFrame.D1
         listen_orders = self.__class__.listen_orders
         name = f"{self.name}/listen_orders"
@@ -244,11 +262,11 @@ class ExecConnector(Connector):
         while self.active:
             account_id = "N/A"
             try:
-                response = await DB_CCH.xread(
+                response = await Redis.xread(
                   streams = xstreams, count = 1)
                 if not response: continue
                 for stream, messages in response:
-                    account_id = stream.split("|")[-1]
+                    account_id = str.split(stream, "|")[-1]
                     for message_id, payload in messages:
                         xstreams[account_id] = message_id
                         await self.sender(account_id, payload)
@@ -286,8 +304,8 @@ class Stream:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def verbose_subs(self, old: set, new: set):
         verbose = f"\"{self.name}\", reviewing subs..."
-        if new: verbose += self.BULLET + "New (subs to):"
+        if new: verbose += "\n => New (subs to):"
         for sub in sorted(new): verbose += self.BULLET + sub
-        if old: verbose += self.BULLET + "Old (unsubs from):"
+        if old: verbose += "\n => Old (unsubs from):"
         for sub in sorted(old): verbose += self.BULLET + sub
         return verbose

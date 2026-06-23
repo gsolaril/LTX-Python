@@ -15,11 +15,11 @@ from src.utils import *
 class StreamWS(Stream):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, name: str, on_message: Callable,
-              url_args: dict, on_ping: Callable = None):
+          url_args: Callable, on_ping: Callable = None):
 
         super().__init__(name)
-        self.url_args: dict = url_args
         self.on_ping: Callable = on_ping
+        self.url_args: Callable = url_args
         self.on_message: Callable = on_message
         self._WS: ClientWebSocketResponse = None
         self._WS_connected = asyncio.Event()
@@ -44,7 +44,7 @@ class StreamWS(Stream):
         async with ClientSession() as session:
             while connector.active:
                 try:
-                    args = self.url_args
+                    args = await self.url_args()
                     Log.info(self.VERBOSE_RECONN.format(self.name, args["url"]))
                     async with session.ws_connect(**args, heartbeat = 30) as WS:
                         self._WS = WS ; self._WS_connected.set()
@@ -92,9 +92,9 @@ class DataConnectorWS(DataConnector):
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataStreamWS(StreamWS):
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __init__(self, name: str, on_message: Callable, url_args: dict, 
-                  on_ping: Callable = None, get_subs: Callable = None):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, name: str, on_message: Callable, url_args: Callable, 
+                      on_ping: Callable = None, get_subs: Callable = None):
 
         super().__init__(name, on_message, url_args, on_ping)
         self.get_subs: Callable = get_subs
@@ -103,7 +103,6 @@ class DataStreamWS(StreamWS):
     async def update(self, connector: DataConnector):
         
         Log.warning(f"WS for \"{self.name}\" channel loop started.")
-        
         while connector.active:
             await asyncio.sleep(1)
             await self._WS_connected.wait()
@@ -175,7 +174,7 @@ class ExecConnectorWS(ExecConnector):
                     **Vault.secrets.kv.v2.read_secret_version(mount_point = "creds",
                         raise_on_deleted_version = True, path = aid)["data"]["data"])
             return cls(*creds.values())
-        return asyncio.run(_load())
+        return Meta.run(_load())
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, *creds):

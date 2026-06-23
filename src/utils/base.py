@@ -114,10 +114,10 @@ Vault.auth.userpass.login(username = _credentials.USERNAME,
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class Credentials(NamedTuple):
-    USERNAME: str; PASSWORD: str; IP: str; DATABASE: str; TYPE: str
+    USERNAME: str; PASSWORD: str; IP: str; DATABASE: str
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def from_kv(cls, data: dict, defs: dict, src: str):
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def _from_kv(cls, data: dict, defs: dict, src: str):
         return cls(*cls._args(data, defs, src))
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -128,8 +128,14 @@ class Credentials(NamedTuple):
             if not (database := defs.get("database", None)):
                 database = input(verbose.format(
                     src = src, attr = "database", ref = username))
-        if not (type := data.pop("type", None)):
-            if not (type := defs.get("type", None)):
-                type = input(verbose.format(
-                    src = src, attr = "type", ref = username))
-        return username, password, ip, database, type
+        return username, password, ip, database
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def get_for(cls, name: str):
+        kv = Vault.secrets.kv.v2.read_secret_version(path = "local",
+                raise_on_deleted_version = True, mount_point = "infra")
+        auth_dict = AUTH.get(name.upper(), dict[str, str]())
+        defaults = dict.fromkeys(["type", "database", "username"], name.lower())
+        defaults["ip"] = f"{DEFAULT_HOST}:{DOCKER[name.lower()]['ports'][0]}"
+        defaults["password"] = kv["data"]["data"][name.lower()]
+        return Credentials._from_kv(src = name, defs = defaults, data = auth_dict)
