@@ -77,6 +77,7 @@ class Connector:
     url: str = field(init = False, kw_only = True, default = None)
     maxlen: int = field(init = False, kw_only = True, default = 10000)
     active: bool = field(init = False, kw_only = True, default = False)
+    freq_report: TimeFrame = field(init = False, kw_only = True, default = TimeFrame.H1)
     last_written: Timestamp = field(init = False, kw_only = True, default = None)
     last_updated: Timestamp = field(init = False, kw_only = True, default = None)
 
@@ -92,37 +93,40 @@ class Connector:
         self._streams = dict[str, object]()
         self._specs = OrderedDict[str, Symbol]()
         self._tasks = dict[str, asyncio.Task]()
-        self._crons = dict[Callable, TimeFrame]()
+        self._crons = {self.report: self.freq_report}
         self._symbols_new = set[str]()
         self._sockets = dict[str, Any]()
         self._offset = Timedelta(0)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def start_cron(self, cron: Callable, tf: TimeFrame):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def start_cron(self, cron: Callable):
         class_name = self.__class__.__name__
         cron_name = class_name + "/cron/" + cron.__name__
         error = f"\"{cron_name}\" cron loop failed"
-        next = Timestamp.now("UTC").ceil(tf.value)
+        next = Timestamp.min.tz_localize("UTC")
         while self.active:
             if (now := Timestamp.now("UTC")) < next:
                 await asyncio.sleep(0.5) ; continue
+            tf: TimeFrame = self._crons[cron]
             try: next = now.ceil(tf.value) ; await cron()
             except Exception as EXC: Log.exception(error, EXC)
-
+            
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def start(self):
         try:
-            DBListener.bind(self)
             verbose_list = list[str]()
             class_name = self.__class__.__name__
 
-            name = f"{class_name}/Postgres/listener"
-            self._tasks[name] = asyncio.create_task(DBListener(), name = name)
+            name = f"{class_name}/Manager/Postgres"
+            self._tasks[name] = asyncio.create_task(
+                Postgres(self), name = name)
             verbose_list.append(f" => {name}: {self._tasks[name]!r}")
-            await DBListener.wait()
-            name = f"{class_name}/Redis/writer"
-            self._tasks[name] = asyncio.create_task(self.writer(), name = name)
+            await Postgres.wait()
+            name = f"{class_name}/Manager/Redis"
+            self._tasks[name] = asyncio.create_task(
+                Redis(self), name = name)
             verbose_list.append(f" => {name}: {self._tasks[name]!r}")
+            await Redis.wait()
 
             for cron, tf in self._crons.items():
                 name = f"{class_name}/cron/{cron.__name__}:{tf!r}"
@@ -144,27 +148,8 @@ class Connector:
         except Exception as EXC: Log.exception(EXC)
         finally: self.active = False
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def writer(self):
-        self._queue = asyncio.Queue(self.maxlen)
-        while self.active:
-            N: int = self._queue._queue.__len__()
-            if (N == 0): await asyncio.sleep(1e-3)
-            else:
-                point: BasePoint = await self._queue.get()
-                suffix, time_us, payload = point.as_cache
-                stream = self.STREAM_PREFIX + "|" + suffix
-                id = str(time_us)[: -3] + "-" + str(time_us)[-3:]
-                if not await Redis.exists(stream): await Redis.xgroup_create(
-                      name = stream, groupname = stream, id = "$", mkstream = True)
-                try: assert (await Redis.xadd(stream, payload, id, int(self.maxlen)))
-                except Exception as EXC: Log.error(
-                    self.VERBOSE_XADD_ERROR.format(stream, payload), EXC)
-                if Config.DEBUG_MODE: Log.debug(
-                    self.VERBOSE_XADD_OK.format(N, stream, id, payload))
-
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @DBListener.on_table(TABLE_CONFIG)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Postgres.on_table(TABLE_CONFIG)
     async def reconfig(self, conn):
         await self.update_config(conn)
         await self.update_specs(conn)
@@ -200,10 +185,10 @@ class Connector:
 class DataConnector(Connector):
     symbols: set[str] = field(init = False,
       kw_only = True, default_factory = set)
-    STREAM_PREFIX: ClassVar[str] = "LTX|DATA"
+    STREAM_PREFIX: ClassVar[str] = "DATA"
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @DBListener.on_table(Connector.TABLE_CONFIG)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Postgres.on_table(Connector.TABLE_CONFIG)
     async def reconfig(self, conn: asyncpg.Connection):
         symbols_config = await self.update_config(conn)
         self._symbols_new = set[str]()
@@ -243,7 +228,7 @@ class DataConnector(Connector):
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class ExecConnector(Connector):
-    STREAM_PREFIX: ClassVar[str] = "LTX|EXEC"
+    STREAM_PREFIX: ClassVar[str] = "EXEC"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
@@ -253,7 +238,7 @@ class ExecConnector(Connector):
         self._streams[name] = listen_orders
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def listen_orders(self):        
+    async def listen_orders(self):
         xstreams = dict[str, str]()
         for account_id in self._sockets.keys():
             xname = self.STREAM_PREFIX + "|" + account_id

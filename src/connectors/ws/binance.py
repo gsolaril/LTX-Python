@@ -119,7 +119,8 @@ class DataBinance(DataConnectorWS, Binance):
     async def on_ping(self, WS: ClientWebSocketResponse, sender: bool = False):
         if not sender: return await WS.send_str("pong")
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_ticks(self, data: Dict):
         if (data := data.get("data", None)) is None: return
         event = data.get("e", None)
@@ -134,8 +135,8 @@ class DataBinance(DataConnectorWS, Binance):
         if symbol is None: return None
         return Tick(symbol = symbol, time = ts, pa = data["a"],
                 qa = data["A"], pb = data["b"], qb = data["B"])
-            
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_klines(self, data: Dict):
         if (data := data.get("data", None)) is None: return
         if (event := data.get("e", None)) is None: return
@@ -179,7 +180,8 @@ class ExecBinance(ExecConnectorWS, Binance):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_ping(self, WS: ClientWebSocketResponse, sender: bool = False):
         if not sender: return await WS.send_str("pong")
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_message(self, message: Dict):
         # TODO: implement for Binance based on Binance API docs
         return Balance(...)

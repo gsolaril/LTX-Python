@@ -20,22 +20,24 @@ class BasePoint:
         delay_s = (now - self.time).total_seconds()
         self.dus = int(delay_s * 1e6)
     #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄
-    def as_cache(self): ...
-    #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def time_us(self): return int(self.time.timestamp() * 1e6)
-
+    #▄▄▄▄▄▄▄▄▄▄
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __dict__(self): return {"stream": self.STREAM_KEY,
+            "time": self.time_us, "payload": asdict(self)}
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataPoint(BasePoint):
+    index: str = field(kw_only = True)
     data: dict = field(kw_only = True)
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄
+    @property#█▄▄▄▄▄▄▄
     def __dict__(self):
-        _dict = asdict(self)
-        data = _dict.pop("data")
-        _dict.update(data)
-        return _dict
+        payload = asdict(self)
+        index, data = payload.pop("index"), payload.pop("data")
+        return {"stream": self.STREAM_KEY + "|" + index,
+                "time": self.time_us, "payload": data}
 
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄
@@ -84,12 +86,12 @@ class Balance(BasePoint):
                 type = "Balance", time = self.time)
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄
-    def as_cache(self):
+    def __dict__(self):
         stream_key = self.STREAM_KEY.format(
           venue = self.account.venue, account_id = self.account.id,
           symbol = "$" if self.symbol is None else self.symbol.symbol)
         payload = {key: getattr(self, key) for key in self.CACHE_KEYS}
-        return stream_key, self.time_us, payload
+        return {"stream": stream_key, "time": self.time_us, "payload": payload}
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -101,11 +103,6 @@ class Tick(Quote):
     pb: float = field(kw_only = True, default = None)
     qb: float = field(kw_only = True, default = None)
     CACHE_KEYS: ClassVar[list[str]] = ["pa", "qa", "pb", "qb", "dus"]
-    #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄
-    def __dict__(self):
-        order = "time symbol pa qa pb qb pavga qavga pavgb qavgb dus error"
-        return {key: self.__getattribute__(key) for key in order.split(" ")}
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
@@ -123,11 +120,11 @@ class Tick(Quote):
 
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄
-    def as_cache(self):
+    def __dict__(self):
         stream_key = self.STREAM_KEY.format(tf = "T1",
             venue = self.symbol.venue, symbol = self.symbol.symbol)
         payload = {key: getattr(self, key) for key in self.CACHE_KEYS}
-        return stream_key, self.time_us, payload
+        return {"stream": stream_key, "time": self.time_us, "payload": payload}
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -147,11 +144,6 @@ class Candle(Quote):
     STREAM_KEY: ClassVar[str] = "{venue}|{symbol}|{tf}"
     INDEX_KEYS: ClassVar[list[str]] = ["tf"] + Quote.INDEX_KEYS.copy()
     CACHE_KEYS: ClassVar[list[str]] = ["oa", "ha", "la", "ca", "ob", "hb", "lb", "cb", "volume", "dus"]
-    #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄
-    def __dict__(self):
-        order = "time tf symbol volume oa ha la ca ob hb lb cb"
-        return {key: getattr(self, key) for key in order.split(" ")}
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __repr__(self):
@@ -233,11 +225,11 @@ class Candle(Quote):
           oa = None, ob = None)
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄
-    def as_cache(self):
+    def __dict__(self):
         stream_key = self.STREAM_KEY.format(tf = self.tf.name,
             venue = self.symbol.venue, symbol = self.symbol.symbol)
         payload = {key: getattr(self, key) for key in self.CACHE_KEYS}
-        return stream_key, self.time_us, payload
+        return {"stream": stream_key, "time": self.time_us, "payload": payload}
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
