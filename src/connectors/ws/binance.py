@@ -93,12 +93,12 @@ class DataBinance(DataConnectorWS, Binance):
     def __init__(self): super().__init__(
         ticks = DataStreamWS(name = self.__class__.__name__ + "/ticks",
             get_subs = self.get_subs_ticks, on_message = self.on_ticks,
-            on_ping = self.on_ping, get_urlh = self.get_url_headers_ticks),
+            on_ping = self.on_ping, url_args = self.get_url_headers_ticks),
         klines = DataStreamWS(name = self.__class__.__name__ + "/klines",
             get_subs = self.get_subs_klines, on_message = self.on_klines,
-            on_ping = self.on_ping, get_urlh = self.get_url_headers_klines))
+            on_ping = self.on_ping, url_args = self.get_url_headers_klines))
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def get_urlh(self, path: str): return {"url": self.url + "/" + path} 
     async def get_url_headers_ticks(self): return await self.get_urlh(self.STREAM_PATH_TICK)
     async def get_url_headers_klines(self): return await self.get_urlh(self.STREAM_PATH_KLINE)

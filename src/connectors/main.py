@@ -1,5 +1,5 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import os, sys, asyncio
+import os, sys, asyncio, time
 from argparse import ArgumentParser
 from pathlib import Path
 
@@ -11,7 +11,7 @@ for _path in (_ROOT, _SRC, _SRC / "models", _SRC / "utils"):
 
 from src.connectors.base import Connector
 from src.connectors.ws import *
-from src.utils import Log
+from src.utils import Log, EventLoop
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -27,6 +27,6 @@ if (__name__ == "__main__"):
     }
     connector: Connector = connectors.get(name.lower(), None)
     if connector is None: parser.error(f"\"{name}\" not found")
-    try: asyncio.run(connector().start())
+    try: EventLoop.run_until_complete(connector().start())
     except Exception as EXC: Log.exception(EXC)
     finally: Log.success(f"Exiting \"{name}\"...")
