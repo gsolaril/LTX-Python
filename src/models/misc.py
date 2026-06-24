@@ -245,4 +245,4 @@ if (__name__ == "__main__"):
     symbol = Symbol(id = "BINANCE BTCUSDT", venue = "BINANCE", symbol = "BTCUSDT",
     quote = "USDT", base = "BTC", min_price_diff = 0.01, min_order_size = 0.001,
     expiration = Timestamp.now("UTC").ceil("1h"))
-    print(symbol.sql_update(symbol.sql_values))
+    print(TimeFrame(Timedelta(seconds = 300)))

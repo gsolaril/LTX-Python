@@ -77,6 +77,7 @@ class Connector:
     url: str = field(init = False, kw_only = True, default = None)
     maxlen: int = field(init = False, kw_only = True, default = 10000)
     active: bool = field(init = False, kw_only = True, default = False)
+    freq_report: int = field(init = False, kw_only = True, default = 600)
     last_written: Timestamp = field(init = False, kw_only = True, default = None)
     last_updated: Timestamp = field(init = False, kw_only = True, default = None)
 
@@ -84,58 +85,73 @@ class Connector:
     STREAM_PREFIX: ClassVar[str] = ...
     TABLE_CONFIG: ClassVar[str] = "connectors"
     TABLE_SYMBOLS: ClassVar[str] = "symbol_specs"
-    VERBOSE_XADD_OK: ClassVar[str] = "[Q{}] \"{}\" XADD @ {} => {}"
-    VERBOSE_XADD_ERROR: ClassVar[str] = "\"{}\" XADD failed:\n => {}"
+    VERBOSE_XADD_OK: ClassVar[str] = "[Q{0}] \"{1}\" XADD @ {2} => {3}"
+    VERBOSE_XADD_ERROR: ClassVar[str] = "\"{0}\" XADD failed:\n => {1}"
+    VERBOSE_TASK = " => {0}: {1!r}"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         self.name = self.__class__.__name__
         self._streams = dict[str, object]()
         self._specs = OrderedDict[str, Symbol]()
+        self._crons = dict[Callable, Timedelta]()
         self._tasks = dict[str, asyncio.Task]()
-        self._crons = dict[Callable, TimeFrame]()
         self._symbols_new = set[str]()
         self._sockets = dict[str, Any]()
         self._offset = Timedelta(0)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def start_cron(self, cron: Callable, tf: TimeFrame):
+        fields = list()
+        for field in self.__dataclass_fields__:
+            if not field[0].islower(): continue
+            fields.append(field)
+        self._FIELDS = str.join(", ", fields)
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def start_cron(self, cron: Callable):
         class_name = self.__class__.__name__
         cron_name = class_name + "/cron/" + cron.__name__
         error = f"\"{cron_name}\" cron loop failed"
-        next = Timestamp.now("UTC").ceil(tf.value)
+        next = Timestamp.min.tz_localize("UTC")
         while self.active:
             if (now := Timestamp.now("UTC")) < next:
                 await asyncio.sleep(0.5) ; continue
-            try: next = now.ceil(tf.value) ; await cron()
-            except Exception as EXC: Log.exception(error, EXC)
-
+            next = now.ceil(self._crons[cron])
+            try: await cron(self)
+            except Exception as EXC:
+                Log.exception(error, EXC)
+            
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def start(self):
         try:
-            DBListener.bind(self)
-            verbose_list = list[str]()
+            self.active = True
+            logs = list[str]()
             class_name = self.__class__.__name__
 
-            name = f"{class_name}/Postgres/listener"
-            self._tasks[name] = asyncio.create_task(DBListener(), name = name)
-            verbose_list.append(f" => {name}: {self._tasks[name]!r}")
-            await DBListener.wait()
-            name = f"{class_name}/Redis/writer"
-            self._tasks[name] = asyncio.create_task(self.writer(), name = name)
-            verbose_list.append(f" => {name}: {self._tasks[name]!r}")
+            name = f"{class_name}/Manager/Postgres"
+            self._tasks[name] = asyncio.create_task(
+                Postgres(self), name = name)
+            logs.append(self.VERBOSE_TASK.format(name, self._tasks[name]))
+            await Postgres.wait()
 
-            for cron, tf in self._crons.items():
-                name = f"{class_name}/cron/{cron.__name__}:{tf!r}"
+            name = f"{class_name}/Manager/Redis"
+            self._tasks[name] = asyncio.create_task(
+                Redis(self), name = name)
+            logs.append(self.VERBOSE_TASK.format(name, self._tasks[name]))
+            await Redis.wait()
+
+            self._crons[Redis.report] = Timedelta(seconds = self.freq_report)
+            for cron in self._crons.keys():
+                name = f"{class_name}/cron/{cron.__name__}"
                 self._tasks[name] = asyncio.create_task(
-                    self.start_cron(cron, tf), name = name)
-                verbose_list.append(f" => {name}: {self._tasks[name]!r}")
+                    self.start_cron(cron), name = name)
+                logs.append(self.VERBOSE_TASK.format(name, self._tasks[name]))
 
             for name, stream in self._streams.items():
                 name = f"{class_name}/{name}"
                 self._tasks[name] = asyncio.create_task(stream(self), name = name)
-                verbose_list.append(f" => {name}: {self._tasks[name]!r}")
-            verbose = f"Starting {len(self._tasks)} tasks in \"{class_name}\":\n"
-            Log.info(verbose + str.join("\n", verbose_list))
+                logs.append(self.VERBOSE_TASK.format(name, self._tasks[name]))
+
+            verbose = f"Started {len(self._tasks)} tasks in \"{class_name}\":"
+            Log.info(verbose + "\n" + str.join("\n", logs))
             results = await asyncio.gather(*self._tasks.values(), return_exceptions = True)
             for result in results:
                 if (result is not None): raise result
@@ -144,38 +160,25 @@ class Connector:
         except Exception as EXC: Log.exception(EXC)
         finally: self.active = False
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def writer(self):
-        self._queue = asyncio.Queue(self.maxlen)
-        while self.active:
-            N: int = self._queue._queue.__len__()
-            if (N == 0): await asyncio.sleep(1e-3)
-            else:
-                point: BasePoint = await self._queue.get()
-                suffix, time_us, payload = point.as_cache
-                stream = self.STREAM_PREFIX + "|" + suffix
-                id = str(time_us)[: -3] + "-" + str(time_us)[-3:]
-                if not await Redis.exists(stream): await Redis.xgroup_create(
-                      name = stream, groupname = stream, id = "$", mkstream = True)
-                try: assert (await Redis.xadd(stream, payload, id, int(self.maxlen)))
-                except Exception as EXC: Log.error(
-                    self.VERBOSE_XADD_ERROR.format(stream, payload), EXC)
-                if Config.DEBUG_MODE: Log.debug(
-                    self.VERBOSE_XADD_OK.format(N, stream, id, payload))
-
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @DBListener.on_table(TABLE_CONFIG)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Postgres.on_table(TABLE_CONFIG)
     async def reconfig(self, conn):
         await self.update_config(conn)
         await self.update_specs(conn)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update_config(self, conn: asyncpg.Connection):
-        TABLE = self.TABLE_CONFIG
-        fields = str.join(", ", self.__dataclass_fields__.keys())
-        query = f"SELECT {fields} FROM {TABLE} WHERE (name = '{self.VENUE}');"
+        FIELDS, TABLE = self._FIELDS, self.TABLE_CONFIG
+        query = f"SELECT {FIELDS} FROM {TABLE} WHERE (name = '{self.VENUE}');"
         config = dict[str, Any](await conn.fetchrow(query))
+        report_freq = Timedelta(seconds = config["freq_report"])
+        self._crons[Redis.report] = report_freq
+        self.last_updated = Timestamp.now("UTC")
+        symbols = config.pop("symbols", None)
+        if symbols: symbols = json.loads(symbols)
+        config["symbols"] = symbols
         for key, value in config.items():
+            if (key == "symbols"): continue
             if (key == "name"): continue
             setattr(self, key, value)
         return config
@@ -200,15 +203,18 @@ class Connector:
 class DataConnector(Connector):
     symbols: set[str] = field(init = False,
       kw_only = True, default_factory = set)
-    STREAM_PREFIX: ClassVar[str] = "LTX|DATA"
-
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @DBListener.on_table(Connector.TABLE_CONFIG)
+    STREAM_PREFIX: ClassVar[str] = "DATA"
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update_config(self, conn: asyncpg.Connection):
+        config: dict = await super().update_config(conn)
+        return config["symbols"]
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Postgres.on_table(Connector.TABLE_CONFIG)
     async def reconfig(self, conn: asyncpg.Connection):
-        symbols_config = await self.update_config(conn)
         self._symbols_new = set[str]()
         self._symbols_old = set[str]()
-        for symbol, keep in symbols_config.items():
+        symbols_config = await self.update_config(conn)
+        for symbol, keep in dict.items(symbols_config):
             available = (symbol in self.symbols)
             if available and keep: continue
             elif available and not keep:
@@ -226,24 +232,12 @@ class DataConnector(Connector):
             verbose += f"\n => \"{field}\": {value!r}"
         Log.info(verbose)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_config(self, conn: asyncpg.Connection):
-        TABLE = self.TABLE_CONFIG
-        query = f"SELECT * FROM {TABLE} WHERE (name = '{self.VENUE}');"
-        result: dict = dict[str, Any](await conn.fetchrow(query))
-        symbols_json: dict = json.loads(result.pop("symbols"))
-        self.last_updated = Timestamp.now("UTC")
-        for key, value in result.items():
-            if (key == "name"): continue
-            setattr(self, key, value)
-        return symbols_json
-
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class ExecConnector(Connector):
-    STREAM_PREFIX: ClassVar[str] = "LTX|EXEC"
+    STREAM_PREFIX: ClassVar[str] = "EXEC"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
@@ -253,7 +247,7 @@ class ExecConnector(Connector):
         self._streams[name] = listen_orders
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def listen_orders(self):        
+    async def listen_orders(self):
         xstreams = dict[str, str]()
         for account_id in self._sockets.keys():
             xname = self.STREAM_PREFIX + "|" + account_id
