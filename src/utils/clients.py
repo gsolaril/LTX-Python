@@ -5,8 +5,10 @@ from clickhouse_driver import Client as ClickHouseClient
 from redis.asyncio import Redis as RedisClient
 from pandas import DataFrame, Timestamp, Timedelta
 from logger import Log, LokiClient
+from enum import StrEnum
 from typing import Any, Callable, ClassVar
 from typing import Protocol, runtime_checkable
+from src.models import Report, BaseAgent
 from base import AUTH, DOCKER, DEFAULT_HOST
 from base import Config, Credentials, Vault
 from base import STARTUP_ERRORS
@@ -14,11 +16,6 @@ from base import STARTUP_ERRORS
 EventLoop: asyncio.AbstractEventLoop
 EventLoop = asyncio.new_event_loop()
 asyncio.set_event_loop(EventLoop)
-#▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄
-class BaseOwner:
-    maxlen: int; active: bool; freq_report: int
-    STREAM_PREFIX: ClassVar[str] = ...
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -88,8 +85,8 @@ class PostgresManager:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def _queue_handler(self, _conn, _pid, _channel, payload):
         self._queue.put_nowait(payload)
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def __call__(self, src: BaseOwner):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def __call__(self, src: Any):
         self._queue = asyncio.Queue()
         conn = await self._client.acquire()
         verbose = "Postgres listeners started:"
@@ -137,38 +134,15 @@ class Redis:
             return client
         return EventLoop.run_until_complete(test())
 
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class RedisGroup(StrEnum):
+    MONITOR: str = "$"
+    STRATEGY: str = "$"
+
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class RedisManager:
-    #▄▄▄▄▄▄▄▄▄▄▄
-    class Report:
-        #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-        def __init__(self, name: str):
-            self._name = name
-            self._start_at = Timestamp.now("UTC")
-            self._batch_at = self._entry_at = None
-            self._last_count = self._mean_count = 0
-            self._batches = self._total_count = 0
-        #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-        def _incr(self, count: int = 1):
-            if (self._batch_at is None):
-                self._batch_at = Timestamp.now("UTC")
-            self._last_count = self._last_count + count
-            self._total_count = self._total_count + count
-            self._entry_at = Timestamp.now("UTC")
-        #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-        def _close_batch(self):
-            self._batches, self._last_count = self._batches + 1, 0
-            self._mean_count = self._total_count / self._batches
-            self._batch_at = Timestamp.now("UTC")
-        #▄▄▄▄▄▄▄▄▄▄
-        @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-        def __dict__(self): return {
-            "name": self._name, "start_at": self._start_at,
-            "batch_at": self._batch_at, "last_count": self._last_count, 
-            "entry_at": self._entry_at, "mean_count": self._mean_count,
-            "batches": self._batches, "total_count": self._total_count}
-            
     PRINT_LIMIT = 50
+    GROUP: list[str] = {"MONITOR": "$", "STRATEGY": "$"}
     VERBOSE_ERROR = "\"{}\" XADD failed:\n => {}"
     VERBOSE_XADD = "[Q{}] \"{}\" XADD @ {} => {}"
     VERBOSE_CP = "Warning: Queue above {0:.0%}."
@@ -178,36 +152,35 @@ class RedisManager:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, client: RedisClient):
         self._client: RedisClient = client
-        self._reports = dict[str, self.Report]()
+        self._reports = dict[str, Report]()
         self._start_at = Timestamp.now("UTC")
         self._ready = asyncio.Event()
         self._ncp = 0.0
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def scan(self, pattern: str = STREAM_PREFIX + "|*"):
+        async for K in self._client.scan_iter(pattern): yield K
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def xreadgroup(self, src: BaseAgent, group: RedisGroup,
+                        streams: dict[str, str], *args, **kwargs):
+        consumer = src.__class__.__name__
+        name: str = getattr(src, "name", None)
+        if name: consumer = consumer + "|" + name
+        return await self._client.xreadgroup(group.name,
+                    consumer, streams, *args, **kwargs)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def xcreategroups(self, stream: str):
+        for group in RedisGroup.__members__:
+            await self._client.xgroup_create(stream, group, 
+                  RedisGroup[group].value, mkstream = True)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def wait(self):
         return await self._ready.wait()
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def report(self, src: BaseOwner):
-        reports = list()
-        for report in self._reports.values():
-            reports.append(report.__dict__.copy())
-            report._close_batch()
-        df = DataFrame(reports)
-        if df.dropna().empty: return
-        df = df.set_index("name").rename_axis(None)
-        freq_report = Timedelta(seconds = src.freq_report)
-        ts_next = Timestamp.now("UTC").ceil(freq_report)
-        header = f"[Next report @ {ts_next:%H:%M}]"
-        df = df.rename_axis(header, axis = "columns")
-        df["mean_count"] = df["mean_count"].astype(int)
-        if (df.shape[0] <= self.PRINT_LIMIT): df = df.sort_index()
-        else: df = df.sort_values("total_count", ascending = False)
-        df["start_at"] = df["start_at"].dt.strftime("%Y/%m/%d %H:%M")
-        df["batch_at"] = df["batch_at"].dt.strftime("%H:%M:%S")
-        df["entry_at"] = df["entry_at"].dt.strftime("%H:%M:%S.%f").str[: -3]
-        ts_start = self._start_at.strftime("%Y/%m/%d %H:%M:%S")
-        verbose = f"Redis manager ongoing since \"{ts_start}\":\n"
-        verbose += df.to_string(max_rows = self.PRINT_LIMIT)
-        Log.info(verbose)
+    async def report(self, src: BaseAgent):
+        freq_report = getattr(src, "freq_report", 600)
+        freq_report = Timedelta(seconds = freq_report)
+        next_at = Timestamp.now("UTC").ceil(freq_report)
+        Log.info(Report.multi_close(self._reports.values(), next_at))
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_stream(self, func: Callable = None):
         def decorator(func: Callable):
@@ -222,7 +195,7 @@ class RedisManager:
         if func is None: return decorator
         return decorator(func)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def __call__(self, src: BaseOwner):
+    async def __call__(self, src: BaseAgent):
         self._queue = asyncio.Queue(src.maxlen)
         self._ready.set()
         while src.active:
@@ -234,9 +207,8 @@ class RedisManager:
                     payload: dict = await self._queue.get()
                     suffix, time, payload = payload.values()
                     id = str(time)[: -3] + "-" + str(time)[-3 :]
-                    prefix = self.STREAM_PREFIX + "|" + src.STREAM_PREFIX + "|"
-                    if not await self._client.exists(stream := prefix + suffix):
-                        await self._client.xgroup_create(stream, stream, "$", mkstream = True)
+                    stream = str.join("|", [self.STREAM_PREFIX, src.STREAM_PREFIX, suffix])
+                    if not await self._client.exists(stream): await self.xcreategroups(stream)
                     assert (await self._client.xadd(stream, payload, id, src.maxlen))
                     if Config.DEBUG_MODE:
                         Log.debug(self.VERBOSE_XADD.format(N, stream, id, payload))
@@ -246,7 +218,7 @@ class RedisManager:
                             self.QUEUE_CHECKPOINTS[ncp](verbose)
                             self._ncp = ncp
                     if (suffix not in self._reports):
-                        self._reports[suffix] = self.Report(suffix)
+                        self._reports[suffix] = Report(suffix)
                     self._reports[suffix]._incr()
                 except Exception as EXC: Log.error(
                     self.VERBOSE_ERROR.format(stream, payload), EXC)

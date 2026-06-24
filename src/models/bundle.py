@@ -69,31 +69,31 @@ class Bundle:
         if self._tick_first is None:
             self._tick_first = tick
 
-        if tick.symbol not in self._ticks:
-            self._ticks[tick.symbol] = OrderedDict()
-            self._count[tick.symbol] = 0
+        if tick.symbol.id not in self._ticks:
+            self._ticks[tick.symbol.id] = OrderedDict()
+            self._count[tick.symbol.id] = 0
             for tf in TimeFrame:
-                self._candles[tf][tick.symbol] = self._queue(self._NC)
+                self._candles[tf][tick.symbol.id] = self._queue(self._NC)
 
         close_at = tick.time + TimeFrame.MIN.value
         close_at = close_at.floor(TimeFrame.MIN.value)
 
-        if close_at not in self._ticks[tick.symbol]:
-            self._ticks[tick.symbol][close_at] = self._queue(self._NT)
+        if close_at not in self._ticks[tick.symbol.id]:
+            self._ticks[tick.symbol.id][close_at] = self._queue(self._NT)
 
-        self._ticks[tick.symbol][close_at].append(tick)
-        self._count[tick.symbol] = self._count[tick.symbol] + 1
+        self._ticks[tick.symbol.id][close_at].append(tick)
+        self._count[tick.symbol.id] = self._count[tick.symbol.id] + 1
 
-        if (self._count[tick.symbol] >= self._n_ticks_max):
-            candles: OrderedDict = self._ticks[tick.symbol]
+        if (self._count[tick.symbol.id] >= self._n_ticks_max):
+            candles: OrderedDict = self._ticks[tick.symbol.id]
             n_drop = len(candles.popitem(last = False)[1])
-            self._count[tick.symbol] -= n_drop
+            self._count[tick.symbol.id] -= n_drop
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_candle(self, candle: Candle):
-        if candle.symbol not in self._candles[candle.tf]:
-            self._candles[candle.tf][candle.symbol] = self._queue(self._NC)
-        self._candles[candle.tf][candle.symbol].append(candle)
+        if candle.symbol.id not in self._candles[candle.tf]:
+            self._candles[candle.tf][candle.symbol.id] = self._queue(self._NC)
+        self._candles[candle.tf][candle.symbol.id].append(candle)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def resample_ticks(self, time: Timestamp = None):
@@ -103,8 +103,9 @@ class Bundle:
         opened_at = closed_at - TimeFrame.MIN.value
 
         candles: OrderedDict = None
-        for symbol, candles in self._ticks.items():
+        for symbol_id, candles in self._ticks.items():
             ticks: deque = candles.get(closed_at, deque())
+            symbol = ticks[0].symbol
             candle = Candle(tf = TimeFrame.MIN,
                 symbol = symbol, time = opened_at)
             for tick in ticks: candle.on_tick(tick)

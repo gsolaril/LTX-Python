@@ -82,6 +82,7 @@ class Binance(Venue):
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataBinance(DataConnectorWS, Binance):
 
+    URL_WS: ClassVar[str] = ...
     STREAM_PATH_TICK: ClassVar[str] = ...
     STREAM_PATH_KLINE: ClassVar[str] = ...
     CHANNEL_KEY_TICK: ClassVar[str] = ...
@@ -99,7 +100,11 @@ class DataBinance(DataConnectorWS, Binance):
             on_ping = self.on_ping, url_args = self.get_url_headers_klines))
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def get_urlh(self, path: str): return {"url": self.url + "/" + path} 
+    async def get_urlh(self, path: str):
+        base = self.url or type(self).URL_WS
+        if not base:
+            raise ValueError(f"{self.__class__.__name__}: websocket url not configured")
+        return {"url": base.rstrip("/") + "/" + path.lstrip("/")} 
     async def get_url_headers_ticks(self): return await self.get_urlh(self.STREAM_PATH_TICK)
     async def get_url_headers_klines(self): return await self.get_urlh(self.STREAM_PATH_KLINE)
 
@@ -211,6 +216,7 @@ class BinanceCoin(Binance):
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataBinanceCoin(DataBinance, BinanceCoin):
+    URL_WS: ClassVar[str] = "wss://dstream.binance.com"
     STREAM_PATH_TICK: ClassVar[str] = "public/stream"
     STREAM_PATH_KLINE: ClassVar[str] = "market/stream"
     CHANNEL_KEY_TICK: ClassVar[str] = "@bookTicker"
@@ -231,6 +237,7 @@ class BinanceSpot(Binance):
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataBinanceSpot(DataBinance, BinanceSpot):
+    URL_WS: ClassVar[str] = "wss://stream.binance.com:9443"
     STREAM_PATH_TICK: ClassVar[str] = "stream"
     STREAM_PATH_KLINE: ClassVar[str] = "stream"
     CHANNEL_KEY_TICK: ClassVar[str] = "@bookTicker"
@@ -251,6 +258,7 @@ class BinanceUsdm(Binance):
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataBinanceUsdm(DataBinance, BinanceUsdm):
+    URL_WS: ClassVar[str] = "wss://fstream.binance.com"
     STREAM_PATH_TICK: ClassVar[str] = "public/stream"
     STREAM_PATH_KLINE: ClassVar[str] = "market/stream"
     CHANNEL_KEY_TICK: ClassVar[str] = "@bookTicker"

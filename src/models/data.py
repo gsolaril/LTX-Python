@@ -10,6 +10,7 @@ from misc import Account, Symbol, TimeFrame
 @dataclass#█▄▄▄
 class BasePoint:
     time: Timestamp = field(kw_only = True, default = None)
+    dus: int = field(kw_only = True, default = None)
     STREAM_KEY: ClassVar[str] = ...
     INDEX_KEYS: ClassVar[list[str]] = ...
     CACHE_KEYS: ClassVar[list[str]] = ...
@@ -18,7 +19,7 @@ class BasePoint:
         now = Timestamp.now("UTC")
         if self.time is None: self.time = now
         delay_s = (now - self.time).total_seconds()
-        self.dus = int(delay_s * 1e6)
+        if (self.dus is None): self.dus = int(delay_s * 1e6)
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def time_us(self): return int(self.time.timestamp() * 1e6)
@@ -38,7 +39,6 @@ class DataPoint(BasePoint):
         index, data = payload.pop("index"), payload.pop("data")
         return {"stream": self.STREAM_KEY + "|" + index,
                 "time": self.time_us, "payload": data}
-
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄
 class Quote(BasePoint):

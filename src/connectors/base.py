@@ -170,7 +170,10 @@ class Connector:
     async def update_config(self, conn: asyncpg.Connection):
         FIELDS, TABLE = self._FIELDS, self.TABLE_CONFIG
         query = f"SELECT {FIELDS} FROM {TABLE} WHERE (name = '{self.VENUE}');"
-        config = dict[str, Any](await conn.fetchrow(query))
+        row = await conn.fetchrow(query)
+        if row is None:
+            return Log.error(f"No config found for \"{self.VENUE}\":\n => {query}")
+        config = dict[str, Any](row)
         report_freq = Timedelta(seconds = config["freq_report"])
         self._crons[Redis.report] = report_freq
         self.last_updated = Timestamp.now("UTC")

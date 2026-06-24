@@ -2,7 +2,7 @@
 import os, sys
 from typing import Any, List, ClassVar
 from dataclasses import dataclass, field, Field
-from pandas import Timestamp, Timedelta
+from pandas import DataFrame, Timestamp, Timedelta
 from enum import Enum, EnumMeta
 from eth_account import Account
 from sympy import divisors
@@ -106,7 +106,7 @@ class Account(DBClass):
 class Symbol(DBClass):
     venue: str = field(kw_only = True)
     symbol: str = field(kw_only = True)
-    quote: str = field(kw_only = True)
+    quote: str = field(kw_only = True, default = None)
     base: str = field(kw_only = True, default = None)
     id: str = field(kw_only = True, default = None)
     min_stops_diff: float = field(kw_only = True, default = None)
@@ -117,6 +117,7 @@ class Symbol(DBClass):
     TABLE: ClassVar[str] = "symbol_specs"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
+        if self.quote is None: self.quote = "USD"
         if self.base is None: self.base = self.symbol
         if self.id is None: self.id = self.venue + self.SEP + self.symbol
     #▄▄▄▄▄▄▄▄▄▄
@@ -211,6 +212,67 @@ class TimeFrame(Enum, metaclass = Meta):
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class BaseAgent:
+    maxlen: int; active: bool; freq_report: int
+    STREAM_PREFIX: ClassVar[str] = ...
+
+#▄▄▄▄▄▄▄▄▄▄▄
+class Report:
+    PRINT_LIMIT = 50
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, name: str):
+        self._name = name
+        self._start_at = Timestamp.now("UTC")
+        self._batch_at = self._entry_at = None
+        self._last_count = self._mean_count = 0
+        self._batches = self._total_count = 0
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def _incr(self, count: int = 1):
+        if (self._batch_at is None):
+            self._batch_at = Timestamp.now("UTC")
+        self._last_count = self._last_count + count
+        self._total_count = self._total_count + count
+        self._entry_at = Timestamp.now("UTC")
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def _close_batch(self):
+        self._batches, self._last_count = self._batches + 1, 0
+        self._mean_count = self._total_count / self._batches
+        self._batch_at = Timestamp.now("UTC")
+    #▄▄▄▄▄▄▄▄▄▄
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __dict__(self): return {
+        "name": self._name, "start_at": self._start_at,
+        "batch_at": self._batch_at, "last_count": self._last_count, 
+        "entry_at": self._entry_at, "mean_count": self._mean_count,
+        "batches": self._batches, "total_count": self._total_count}
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄   
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def multi_close(cls, reports: list[Report], next_at: Timestamp = None):
+        closed = list[Report]()
+        for report in reports:
+            closed.append(report.__dict__)
+            report._close_batch()
+        df = DataFrame(closed)
+        if df.dropna().empty: return
+        df = df.set_index("name")
+        df = df.rename_axis(None)
+        if next_at is not None:
+            header = f"[Next report @ {next_at:%H:%M}]"
+            df = df.rename_axis(header, axis = "columns")
+        df["mean_count"] = df["mean_count"].astype(int)
+        if (df.shape[0] <= cls.PRINT_LIMIT): df = df.sort_index()
+        else: df = df.sort_values("total_count", ascending = False)
+        ts_start = df["start_at"].min()
+        df["start_at"] = df["start_at"].dt.strftime("%Y/%m/%d %H:%M")
+        df["batch_at"] = df["batch_at"].dt.strftime("%H:%M:%S")
+        df["entry_at"] = df["entry_at"].dt.strftime("%H:%M:%S.%f").str[: -3]
+        verbose = f"Redis manager ongoing since \"{ts_start}\":\n"
+        return verbose + df.to_string(max_rows = cls.PRINT_LIMIT)
+
+#███████████████████████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 if (__name__ == "__main__"):
     #Log.warning("This is a warning message.")
     #Log.error("This is an error message.")
