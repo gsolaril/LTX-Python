@@ -3,7 +3,7 @@ import os, sys, asyncio, json, asyncpg, functools
 from dataclasses import dataclass, field
 from clickhouse_driver import Client as ClickHouseClient
 from redis.asyncio import Redis as RedisClient
-from pandas import DataFrame, Timestamp
+from pandas import DataFrame, Timestamp, Timedelta
 from logger import Log, LokiClient
 from typing import Any, Callable, ClassVar
 from typing import Protocol, runtime_checkable
@@ -17,7 +17,7 @@ asyncio.set_event_loop(EventLoop)
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄
 class BaseOwner:
-    maxlen: int; active: bool
+    maxlen: int; active: bool; freq_report: int
     STREAM_PREFIX: ClassVar[str] = ...
 
 #███████████████████████████████████████████████████████████████████████████████████████████
@@ -82,14 +82,9 @@ class PostgresManager:
         self._to_listen = dict[str, Callable]()
         self._client: asyncpg.Pool = client
         self._ready = asyncio.Event()
-        self._owner = None
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def wait(self):
         return await self._ready.wait()
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def _on_call(self, func: Callable, conn: asyncpg.Connection):
-        if self._owner is not None: return await func(self._owner, conn)
-        return await func(conn)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def _queue_handler(self, _conn, _pid, _channel, payload):
         self._queue.put_nowait(payload)
@@ -99,7 +94,7 @@ class PostgresManager:
         conn = await self._client.acquire()
         verbose = "Postgres listeners started:"
         for func in self._to_listen.values():
-            await self._on_call(func, conn)
+            await func(src, conn)
         for table, func in self._to_listen.items():
             await conn.execute(self._QUERY.format(table))
             await conn.add_listener(table, self._queue_handler)
@@ -111,7 +106,7 @@ class PostgresManager:
                 table = json.loads(await self._queue.get())["table"]
                 if (func := self._to_listen.get(table)) is None: continue
                 async with self._client.acquire() as conn: await func(src, conn)
-            except Exception as EXC: conn.close(); return Log.exception(EXC)
+            except Exception as EXC: Log.exception(EXC); return conn.close()
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_table(self, table: str):
         def decorator(func: Callable):
@@ -155,6 +150,8 @@ class RedisManager:
             self._batches = self._total_count = 0
         #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def _incr(self, count: int = 1):
+            if (self._batch_at is None):
+                self._batch_at = Timestamp.now("UTC")
             self._last_count = self._last_count + count
             self._total_count = self._total_count + count
             self._entry_at = Timestamp.now("UTC")
@@ -174,37 +171,56 @@ class RedisManager:
     PRINT_LIMIT = 50
     VERBOSE_ERROR = "\"{}\" XADD failed:\n => {}"
     VERBOSE_XADD = "[Q{}] \"{}\" XADD @ {} => {}"
+    VERBOSE_CP = "Warning: Queue above {0:.0%}."
     STREAM_PREFIX: ClassVar[str] = "LTX"
+    QUEUE_CHECKPOINTS = {0.5: Log.debug,
+      0.8: Log.warning, 0.95: Log.error}
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, client: RedisClient):
         self._client: RedisClient = client
         self._reports = dict[str, self.Report]()
         self._start_at = Timestamp.now("UTC")
         self._ready = asyncio.Event()
+        self._ncp = 0.0
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def wait(self):
         return await self._ready.wait()
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def report(self):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def report(self, src: BaseOwner):
         reports = list()
         for report in self._reports.values():
             reports.append(report.__dict__.copy())
             report._close_batch()
-        df = DataFrame(reports).set_index("name")
+        df = DataFrame(reports)
+        if df.dropna().empty: return
+        df = df.set_index("name").rename_axis(None)
+        freq_report = Timedelta(seconds = src.freq_report)
+        ts_next = Timestamp.now("UTC").ceil(freq_report)
+        header = f"[Next report @ {ts_next:%H:%M}]"
+        df = df.rename_axis(header, axis = "columns")
+        df["mean_count"] = df["mean_count"].astype(int)
         if (df.shape[0] <= self.PRINT_LIMIT): df = df.sort_index()
         else: df = df.sort_values("total_count", ascending = False)
-        ts = self._start_at.strftime("%Y/%m/%d %H:%M:%S")
-        verbose = f"Redis manager ongoing since \"{ts}\". Report:\n"
-        Log.info(verbose + df.to_string(max_rows = self.PRINT_LIMIT))
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def on_stream(self):
+        df["start_at"] = df["start_at"].dt.strftime("%Y/%m/%d %H:%M")
+        df["batch_at"] = df["batch_at"].dt.strftime("%H:%M:%S")
+        df["entry_at"] = df["entry_at"].dt.strftime("%H:%M:%S.%f").str[: -3]
+        ts_start = self._start_at.strftime("%Y/%m/%d %H:%M:%S")
+        verbose = f"Redis manager ongoing since \"{ts_start}\":\n"
+        verbose += df.to_string(max_rows = self.PRINT_LIMIT)
+        Log.info(verbose)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def on_stream(self, func: Callable = None):
         def decorator(func: Callable):
             @functools.wraps(func)
             async def wrapped(*args, **kwargs):
-                obj: Any = func(*args, **kwargs)
-                self._queue.put_nowait(obj.__dict__)
+                obj = await func(*args, **kwargs)
+                if (obj is None): return
+                payload: dict = obj.__dict__
+                self._queue.put_nowait(payload)
+                return obj
             return wrapped
-        return decorator
+        if func is None: return decorator
+        return decorator(func)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def __call__(self, src: BaseOwner):
         self._queue = asyncio.Queue(src.maxlen)
@@ -214,6 +230,7 @@ class RedisManager:
                 await asyncio.sleep(1e-6); continue
             else:
                 try:
+                    ncp = int(20 * N / src.maxlen + 1) / 20
                     payload: dict = await self._queue.get()
                     suffix, time, payload = payload.values()
                     id = str(time)[: -3] + "-" + str(time)[-3 :]
@@ -221,10 +238,18 @@ class RedisManager:
                     if not await self._client.exists(stream := prefix + suffix):
                         await self._client.xgroup_create(stream, stream, "$", mkstream = True)
                     assert (await self._client.xadd(stream, payload, id, src.maxlen))
-                    if Config.DEBUG_MODE: Log.debug(self.VERBOSE_XADD.format(N, stream, id, payload))
-                    if (suffix not in self._reports): self._reports[suffix] = self.Report(suffix)
+                    if Config.DEBUG_MODE:
+                        Log.debug(self.VERBOSE_XADD.format(N, stream, id, payload))
+                    if (ncp != self._ncp):
+                        if ncp in self.QUEUE_CHECKPOINTS:
+                            verbose = self.VERBOSE_CP.format(ncp)
+                            self.QUEUE_CHECKPOINTS[ncp](verbose)
+                            self._ncp = ncp
+                    if (suffix not in self._reports):
+                        self._reports[suffix] = self.Report(suffix)
                     self._reports[suffix]._incr()
-                except Exception as EXC: Log.error(self.VERBOSE_ERROR.format(stream, payload), EXC)
+                except Exception as EXC: Log.error(
+                    self.VERBOSE_ERROR.format(stream, payload), EXC)
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  

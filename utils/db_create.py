@@ -7,13 +7,9 @@ from pandas import Timestamp, Timedelta
 from pandas import concat, to_datetime
 from sqlalchemy import create_engine, TextClause
 
-_ROOT = Path(__file__).resolve().parents[1]
-_auth = ConfigParser()
-_auth.read(_ROOT / "auth.ini")
-_db = dict(_auth.items("DB_ORM"))
-DB_ORM = create_engine(
-    "postgresql://{username}:{password}@{ip}/{database}".format(**_db),
-    isolation_level = "AUTOCOMMIT")
+URL = "postgresql://postgres:{password}@localhost:5432/postgres"
+url = URL.format(password = input("Enter Postgres password... "))
+DB_ORM = create_engine(url = url, isolation_level = "AUTOCOMMIT")
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -91,8 +87,8 @@ with DB_ORM.connect() as conn:
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-TABLE = "conns_data_config"
-query_create_conns_data_config = TextClause(f"""
+TABLE = "connectors"
+query_create_connectors = TextClause(f"""
     DROP TABLE IF EXISTS {TABLE};
     CREATE TABLE IF NOT EXISTS {TABLE} (
         name TEXT PRIMARY KEY,
@@ -100,6 +96,7 @@ query_create_conns_data_config = TextClause(f"""
         url_api TEXT NOT NULL,
         active BOOLEAN NOT NULL,
         maxlen INTEGER NOT NULL,
+        freq_report INTEGER NOT NULL,
         last_written TIMESTAMP NOT NULL,
         last_updated TIMESTAMP NOT NULL,
         symbols JSON NOT NULL
@@ -107,19 +104,16 @@ query_create_conns_data_config = TextClause(f"""
 
 
 data = DataFrame([{
-        "name": "BinanceUsdm", "url_ws": "wss://fstream.binance.com",
-        "url_api": "https://fapi.binance.com/fapi/v1", "active": True,
-        "maxlen": 10000, "last_written": None, "last_updated": None,
+        "name": "BinanceUsdm", "url": "wss://fstream.binance.com", "active": True,
+        "maxlen": 10000, "freq_report": 300, "last_written": None, "last_updated": None,
         "symbols": {"BTCUSDT": True, "ETHUSDT": True, "SOLUSDT": True}
     }, {
-        "name": "BinanceCoin", "url_ws": "wss://dstream.binance.com",
-        "url_api": "https://dapi.binance.com/dapi/v1", "active": True,
-        "maxlen": 10000, "last_written": None, "last_updated": None,
+        "name": "BinanceCoin", "url": "wss://dstream.binance.com", "active": True,
+        "maxlen": 10000, "freq_report": 300, "last_written": None, "last_updated": None,
         "symbols": {"BTCUSD_PERP": True, "ETHUSD_PERP": True, "SOLUSD_PERP": True}
     }, {
-        "name": "BinanceSpot", "url_ws": "wss://stream.binance.com:9443",
-        "url_api": "https://api.binance.com/api/v3", "active": True,
-        "maxlen": 10000, "last_written": None, "last_updated": None,
+        "name": "BinanceSpot", "url": "wss://stream.binance.com:9443", "active": True,
+        "maxlen": 10000, "freq_report": 300, "last_written": None, "last_updated": None,
         "symbols": {"BTCUSD": True, "ETHUSD": True, "SOLUSD": True}
     }]).set_index("name")
 
@@ -130,5 +124,5 @@ data["symbols"] = data["symbols"].map(
     lambda value: json.dumps(value) if isinstance(value, dict) else value)
 
 with DB_ORM.connect() as conn:
-    conn.execute(query_create_conns_data_config); conn.commit()
+    conn.execute(query_create_connectors); conn.commit()
     data.to_sql(TABLE, conn, if_exists = "replace", index = True)

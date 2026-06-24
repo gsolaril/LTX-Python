@@ -1,7 +1,6 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 import os, sys, json, subprocess
 from getpass import getpass
-from typing import Any
 from pathlib import Path
 from configparser import ConfigParser
 from hvac import Client as VaultClient
@@ -139,22 +138,3 @@ class Credentials(NamedTuple):
         defaults["ip"] = f"{DEFAULT_HOST}:{DOCKER[name.lower()]['ports'][0]}"
         defaults["password"] = kv["data"]["data"][name.lower()]
         return Credentials._from_kv(src = name, defs = defaults, data = auth_dict)
-#▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄
-class BasePoint:
-    time: Timestamp = field(kw_only = True, default = None)
-    STREAM_KEY: ClassVar[str] = ...
-    INDEX_KEYS: ClassVar[list[str]] = ...
-    CACHE_KEYS: ClassVar[list[str]] = ...
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __post_init__(self):
-        now = Timestamp.now("UTC")
-        if self.time is None: self.time = now
-        delay_s = (now - self.time).total_seconds()
-        self.dus = int(delay_s * 1e6)
-    #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄
-    def as_cache(self): ...
-    #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def time_us(self): return int(self.time.timestamp() * 1e6)

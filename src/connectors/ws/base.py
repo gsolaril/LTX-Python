@@ -55,9 +55,7 @@ class StreamWS(Stream):
                             if (message.type == WSMsgType.TEXT):
                                 try:
                                     message_json: dict = message.json()
-                                    result = await self.on_message(message_json)
-                                    if (result is None): continue
-                                    await connector._queue.put(result)
+                                    await self.on_message(message_json)
                                 except json.JSONDecodeError:
                                     text = str(message.data)
                                     if (text.lower() == "pong"): pass
