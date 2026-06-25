@@ -28,28 +28,43 @@ class Collector(BaseAgent):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
-
         self._xstreams = dict[str, str]()
         self._reporter = Reporter(name = "Collector")
+        self.maxlen = max(self.maxlen, 1000000)
         self._bundle = StreamingBundle(maxlen = self.maxlen)
         self._crons[self.scan] = Timedelta(seconds = self.freq_scan)
         self._crons[self.report] = Timedelta(seconds = self.freq_report)
         self._crons[self.resample] = Timedelta(seconds = TimeFrame.MIN.value)
         self._scan_ready = asyncio.Event()
 
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def setup(self):
+        name = f"{self.name}/main"
+        tasks, logs = await super().setup()
+        tasks[name] = asyncio.create_task(self.main(), name = name)
+        logs.append(self.VERBOSE_TASK.format(name, tasks[name]))
+        return tasks, logs
+
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def resample(self):
         last = Timestamp.now("UTC").floor(TimeFrame.MIN.value)
         ticks, candles = self._bundle.resample_ticks(last)
         candles.extend(self._bundle.resample_candles(last))
-
+        await self.write_ticks(ticks)
+        await self.write_candles(candles)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def write(self, series: list[Tick | Candle]):
         __dict__ = lambda X: X.__dict__
-        gen_tick = map(__dict__, ticks)
-        gen_candle = map(__dict__, candles)
-        dft = DataFrame(gen_tick).set_index(Tick.INDEX_KEYS)
-        dfc = DataFrame(gen_candle).set_index(Candle.INDEX_KEYS)
-        if not dft.empty: ClickHouse.push("history_ticks", dft)
-        if not dfc.empty: ClickHouse.push("history_candles", dfc)
+        gen_series = map(__dict__, series)
+        return DataFrame(gen_series)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @ClickHouse.to_series(TS_TICKS := "history_ticks")
+    def write_ticks(self, series: list[Tick]):
+        return self.write(series).set_index(Tick.INDEX_KEYS)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @ClickHouse.to_series(TS_CANDLES := "history_candles")
+    def write_candles(self, series: list[Candle]):
+        return self.write(series).set_index(Candle.INDEX_KEYS)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def scan(self):
@@ -98,22 +113,6 @@ class Collector(BaseAgent):
                         self.process(stream, message_id, payload)
             except asyncio.CancelledError: break
             except Exception as EXC: Log.exception(EXC); break
-
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def start(self):
-        self._tasks = {
-            "scan": asyncio.create_task(self.start_cron(self.scan)),
-            "report": asyncio.create_task(self.start_cron(self.report)),
-            "main": asyncio.create_task(self.main()),
-        }
-        tasks = await asyncio.gather(
-            *self._tasks.values(),
-            return_exceptions = True)
-        for task in tasks:
-            if (task is None): continue
-            try: raise task
-            except Exception as EXC:
-                Log.exception(EXC)
         
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

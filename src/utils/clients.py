@@ -3,7 +3,7 @@ import os, sys, asyncio, json, asyncpg, functools
 from dataclasses import dataclass, field
 from clickhouse_driver import Client as ClickHouseClient
 from redis.asyncio import Redis as RedisClient
-from pandas import DataFrame, Timestamp, Timedelta
+from pandas import DataFrame, Series, Timestamp, Timedelta
 from logger import Log, LokiClient
 from enum import StrEnum
 from typing import Any, Callable, ClassVar
@@ -240,12 +240,53 @@ class ClickHouse:
             assert client.execute(query) == [(1,)]
             return client
         return EventLoop.run_until_complete(test())
- 
+
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class ClickHouseManager:
+    VERBOSE_PUSH = "Pushed {0} rows to \"{1}\":\n => {2}"
+    VERBOSE_ERROR = "Failed to write to \"{0}\":"
+    QUERY_INSERT = "INSERT INTO {0} ({1}) VALUES"
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, client: ClickHouseClient):
+        self._client: ClickHouseClient = client
+        self._ready = set[str]()
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def write(self, series: str, df: DataFrame):
+        
+        df = df.copy()
+        if df.empty: return 0
+        if (df.index.names != (None,)) and any(df.index.names): df = df.reset_index()
+        if ("time" in df.columns): df["time"] = df["time"].map(Timestamp.to_pydatetime)
+        rows = df.to_records(index = False).tolist()
+        query = self.QUERY_INSERT.format(series, str.join(", ", df.columns))
+        self._client.execute(query, rows, types_check = True)
+        return len(rows)
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def to_series(self, func: Callable, series: str):
+
+        def decorator(func: Callable):
+            @functools.wraps(func)
+            def wrapped(*args, **kwargs):
+                async def write():
+                    try:
+                        df: DataFrame = func(*args, **kwargs)
+                        assert (n_rows := self.write(series, df)) > 0
+                        df = df.groupby(df.index.names).size().reset_index(drop = True)
+                        Log.info(self.VERBOSE_PUSH.format(n_rows, series, df.to_string()))
+                    except AssertionError: Log.error(f"No rows written to \"{series}\"")
+                    except Exception as EXC:
+                        Log.exception(self.VERBOSE_ERROR.format(series), EXC)
+                asyncio.create_task(write())
+            return wrapped
+        return decorator(func)
+
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀       
 try:
     Redis: RedisManager = RedisManager(Redis.create())
-    ClickHouse: ClickHouseClient = ClickHouse.create()
+    ClickHouse: ClickHouseManager = ClickHouseManager(ClickHouse.create())
     Postgres: PostgresManager = PostgresManager(Postgres.create())
 except Exception as EXC:
     Log.exception(EXC)

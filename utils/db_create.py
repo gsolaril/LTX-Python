@@ -1,18 +1,68 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 import sys, json, requests
 from pathlib import Path
+from getpass import getpass
 from configparser import ConfigParser
 from pandas import Series, DataFrame
 from pandas import Timestamp, Timedelta
 from pandas import concat, to_datetime
 from sqlalchemy import create_engine, TextClause
-
-URL = "postgresql://postgres:{password}@localhost:5432/postgres"
-url = URL.format(password = input("Enter Postgres password... "))
-DB_ORM = create_engine(url = url, isolation_level = "AUTOCOMMIT")
+from clickhouse_connect import get_client
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+query_create_history_tables = {
+    "history_ticks": ("""
+    CREATE TABLE IF NOT EXISTS {table} (
+    venue LowCardinality(String), symbol LowCardinality(String),
+    time DateTime64(6, 'UTC'), pa Float64, qa Float64, pb Float64,
+    qb Float64, pma Float64, qma Float64, pmb Float64, qmb Float64,
+    dus Int32) ENGINE = MergeTree() ORDER BY (time, venue, symbol)
+    TTL time + INTERVAL 30 DAY SETTINGS index_granularity = 8192
+    """),
+    "history_candles": ("""
+    CREATE TABLE IF NOT EXISTS {table} (
+    tf LowCardinality(String), venue LowCardinality(String),
+    symbol LowCardinality(String), time DateTime64(6, 'UTC'),
+    oa Float64, ha Float64, la Float64, ca Float64,
+    ob Float64, hb Float64, lb Float64, cb Float64,
+    volume UInt64, dus Int32) ENGINE = MergeTree() ORDER BY (time, venue, symbol, tf)
+    TTL time + INTERVAL 365 DAY SETTINGS index_granularity = 8192
+    """)}
+
+password = getpass("Enter ClickHouse password... ")
+DB_TSS = get_client(host = "localhost", port = 8123,
+        username = "clickhouse", password = password)
+
+print("Databases on ClickHouse server:")
+dbs = DB_TSS.query("SHOW DATABASES")
+for db in dbs.result_rows:
+    print(f"=> {db[0]}")
+
+#DB_TSS.query("DROP DATABASE IF EXISTS clickhouse")
+DB_TSS.query("CREATE DATABASE IF NOT EXISTS clickhouse")
+DB_TSS.query("USE clickhouse")
+for table, query in query_create_history_tables.items():
+    DB_TSS.query(query.format(table = table))
+
+print("ClickHouse Tables and Schemas:")
+tables = DB_TSS.query("SHOW TABLES")
+for table_row in tables.result_rows:
+    table_name = table_row[0]
+    print(f"\nTable: {table_name}")
+    schema = DB_TSS.query(f"DESCRIBE TABLE {table_name}")
+    for col in schema.result_rows:
+        print(f"=> {col[0]}: {col[1]}")
+
+raise EOFError("ClickHouse tables created")
+
+#███████████████████████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+URL = "postgresql://postgres:{password}@localhost:5432/postgres"
+url = URL.format(password = getpass("Enter Postgres password... "))
+DB_ORM = create_engine(url = url, isolation_level = "AUTOCOMMIT")
 
 TABLE = "symbol_specs"
 query_create_symbol_specs = TextClause(f"""
