@@ -4,24 +4,15 @@ from collections import OrderedDict
 from typing import Any, ClassVar, Callable
 from dataclasses import dataclass, field
 from pandas import Timestamp, Timedelta
-from src.utils import Log, Postgres, Redis
-from src.models import Symbol
+from loguru import logger as Log
+from misc import Symbol
+from src.utils import Postgres, Redis
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class BaseAgentMeta(type):
-    def __new__(mcls: type, name: str, bases: tuple[type], namespace: dict[str, Any]):
-        cls = super().__new__(mcls, name, bases, namespace)
-        cls.FIELDS = list()
-        for field in getattr(cls, "__dataclass_fields__", []):
-            if str.islower(field[0]): cls.FIELDS.append(field)
-        cls.FIELDS_STR = str.join(", ", cls.FIELDS)
-        return cls
-
 #▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class BaseAgent(metaclass = BaseAgentMeta):
+@dataclass#█▄▄▄
+class BaseAgent:
     name: str = field(init = False, kw_only = True, default = None)
     url: str = field(init = False, kw_only = True, default = None)
     maxlen: int = field(init = False, kw_only = True, default = 10000)
@@ -33,7 +24,7 @@ class BaseAgent(metaclass = BaseAgentMeta):
     STREAM_PREFIX: ClassVar[str] = ...
     TABLE_CONFIG: ClassVar[str] = ...
     TABLE_SYMBOLS: ClassVar[str] = "symbol_specs"
-    VERBOSE_TASK: ClassVar[str] = " => {0}: {1!r}"
+    VERBOSE_TASK: ClassVar[str] = "\n => {0}: \"{1}\""
     FIELDS: ClassVar[list[str]] = ...
     FIELDS_STR: ClassVar[str] = ...
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -44,6 +35,14 @@ class BaseAgent(metaclass = BaseAgentMeta):
         self._crons = dict[Callable, Timedelta]()
         self._tasks = dict[str, asyncio.Task]()
         
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls.FIELDS = list()
+        for field in cls.__dataclass_fields__:
+            if str.islower(field[0]): cls.FIELDS.append(field)
+        cls.FIELDS_STR = str.join(", ", cls.FIELDS)
+
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def start_cron(self, cron: Callable):
         class_name = self.__class__.__name__
@@ -61,37 +60,37 @@ class BaseAgent(metaclass = BaseAgentMeta):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def setup(self):
         self.active = True
-        logs = list[str]()
-        tasks = dict[str, asyncio.Task]()
+        tasks = list[asyncio.Task]()
 
-        name = f"{self.name}/Manager/Postgres"
-        tasks[name] = asyncio.create_task(
-            Postgres(self), name = name)
-        logs.append(self.VERBOSE_TASK.format(name, tasks[name]))
+        tasks.append(asyncio.create_task(
+            Postgres(self),
+            name = f"{self.name}/Manager/Postgres"))
         await Postgres.wait()
 
-        name = f"{self.name}/Manager/Redis"
-        tasks[name] = asyncio.create_task(
-            Redis(self), name = name)
-        logs.append(self.VERBOSE_TASK.format(name, tasks[name]))
+        tasks.append(asyncio.create_task(
+            Redis(self),
+            name = f"{self.name}/Manager/Redis"))
         await Redis.wait()
 
-        self._crons[Redis.report] = Timedelta(seconds = self.freq_report)
+        freq_report = Timedelta(seconds = self.freq_report)
+        self._crons[Redis.report] = freq_report
         for cron in self._crons.keys():
             name = f"{self.name}/cron/{cron.__name__}"
-            tasks[name] = asyncio.create_task(
-                self.start_cron(cron), name = name)
-            logs.append(self.VERBOSE_TASK.format(name, tasks[name]))
+            tasks.append(asyncio.create_task(
+                self.start_cron(cron), name = name))
 
-        return tasks, logs
+        return tasks
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def start(self):
         try:
-            self._tasks, logs = await self.setup()
-            verbose = f"Started {len(self._tasks)} tasks in \"{self.name}\":"
-            Log.info(verbose + "\n" + str.join("\n", logs))
-            results = await asyncio.gather(*self._tasks.values(), return_exceptions = True)
+            verbose = ""
+            self._tasks = await self.setup()
+            for task in self._tasks:
+                name, coro = task.get_name(), task.get_coro().__qualname__
+                verbose = verbose + self.VERBOSE_TASK.format(name, coro)
+            Log.info(f"Started {len(self._tasks)} tasks in \"{self.name}\"... {verbose}")
+            results = await asyncio.gather(*self._tasks, return_exceptions = True)
             for result in results:
                 if (result is not None): raise result
         except KeyboardInterrupt: Log.success("Exiting...")

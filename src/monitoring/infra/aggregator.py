@@ -1,8 +1,8 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import os, sys, asyncio
-from dataclasses import dataclass, field
+import asyncio
 from pandas import Series, DataFrame
 from pandas import Timestamp, Timedelta
+from dataclasses import dataclass, field
 from src.models import *
 from src.utils import *
 
@@ -13,37 +13,33 @@ class StreamingBundle(Bundle):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄
     def on_tick(self, tick: Tick):
-        super().on_tick(tick)
-        return tick
+        super().on_tick(tick); return tick
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_candle(self, candle: Candle):
-        super().on_candle(candle)
-        return candle
+        super().on_candle(candle); return candle
 
 #▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class Collector(BaseAgent):
+@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class Aggregator(BaseAgent):
     freq_scan: int = field(init = False, kw_only = True, default = 60)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
         self._xstreams = dict[str, str]()
-        self._reporter = Reporter(name = "Collector")
-        self.maxlen = max(self.maxlen, 1000000)
-        self._bundle = StreamingBundle(maxlen = self.maxlen)
+        self._reporter = Reporter(name = "Aggregator")
         self._crons[self.scan] = Timedelta(seconds = self.freq_scan)
         self._crons[self.report] = Timedelta(seconds = self.freq_report)
         self._crons[self.resample] = Timedelta(seconds = TimeFrame.MIN.value)
+        self._bundle = StreamingBundle(maxlen = self.maxlen)
         self._scan_ready = asyncio.Event()
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def setup(self):
-        name = f"{self.name}/main"
-        tasks, logs = await super().setup()
-        tasks[name] = asyncio.create_task(self.main(), name = name)
-        logs.append(self.VERBOSE_TASK.format(name, tasks[name]))
-        return tasks, logs
+        tasks = await super().setup()
+        tasks.append(asyncio.create_task(
+            self.main(), name = f"{self.name}/main"))
+        return tasks
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def resample(self):

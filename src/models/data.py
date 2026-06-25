@@ -8,43 +8,6 @@ from misc import Account, Symbol, TimeFrame
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class Queue(asyncio.Queue):
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __init__(self, maxsize: int,
-            checkpoints: dict[float, Callable] = None):
-        self._checkvalues = list(checkpoints)
-        self._checkfunctions = list[Callable]()
-        super().__init__(maxsize = maxsize)
-        if checkpoints is not None:
-            for value, func in checkpoints.items():
-                if (value > 1.0): value /= maxsize
-                self._checkvalues.append(value)
-                self._checkfunctions.append(func)
-        self.last_checkpoint = 0
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def put(self, item: Any): await super().put(item); self._recheck()
-    def put_nowait(self, item: Any): super().put_nowait(item); self._recheck()
-    async def get(self): item = await super().get(); self._recheck(); return item
-    def get_nowait(self): item = super().get_nowait(); self._recheck(); return item   
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def _recheck(self):
-        value = self.qsize() / self.maxsize
-        index_next = self.last_checkpoint
-        index_lower = self.last_checkpoint
-        index_upper = self.last_checkpoint + 1
-        value_lower = self._checkvalues[index_lower]
-        value_upper = self._checkvalues[index_upper]
-        if (value_upper <= value): index_next += 1
-        elif (value < value_lower): index_next -= 1
-        if (value >= 1) and (1 not in self._checkvalues):
-            print("Warning: no checkpoint for full queue!")
-        if (index_next != self.last_checkpoint):
-            self._checkfunctions[index_next](value)
-            self.last_checkpoint = index_next
-
-#███████████████████████████████████████████████████████████████████████████████████████████████████████████
-#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄
 class BasePoint:

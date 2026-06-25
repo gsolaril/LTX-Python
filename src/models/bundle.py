@@ -4,7 +4,7 @@ from collections import deque
 from collections import OrderedDict
 from pandas import Series, DataFrame
 from pandas import concat, Timestamp
-from data import Tick, Candle, Queue
+from data import Tick, Candle
 from misc import TimeFrame
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████

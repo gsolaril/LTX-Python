@@ -3,30 +3,14 @@ import asyncio, asyncpg, json
 from getpass import getpass
 from dataclasses import dataclass, field
 from pandas import Timestamp, Timedelta
-from typing import Any, ClassVar, Callable
-from typing import Any, NamedTuple
-from collections import OrderedDict
-from src.models import *
+from typing import Any, ClassVar, NamedTuple
+from src.models import BaseAgent, Symbol, TimeFrame
 from src.utils import *
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class Meta(type):
-    REMOVE_WORDS = ("Data", "Exec")
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __new__(mcls: type, name: str, bases: tuple[type], namespace: dict[str, Any]):
-        cls = super().__new__(mcls, name, bases, namespace)
-        if any(issubclass(base, Venue) for base in bases):
-            if ((venue := name) != "Venue"):
-                for word in Meta.REMOVE_WORDS:
-                    if not venue.startswith(word): continue
-                    venue = venue.replace(word, "").strip()
-                cls.VENUE = venue
-        return cls
-
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class Venue(metaclass = Meta):
+#▄▄▄▄▄▄▄▄▄▄
+class Venue:
 
     VENUE: str = ...
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -34,6 +18,17 @@ class Venue(metaclass = Meta):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, creds: Credentials = None):
         self.creds = self.auth_local(creds)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if (cls is Venue): return
+        venue: str = cls.__name__
+        for base in cls.__bases__:
+            if not issubclass(base, Venue): continue
+            for word in ("Data", "Exec"):
+                if venue.startswith(word):
+                    venue = venue.replace(word, "")
+        cls.VENUE = venue
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def auth_local(cls, creds: Credentials = None):
@@ -85,12 +80,11 @@ class Connector(BaseAgent):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def setup(self):
-        tasks, logs = await super().setup() 
+        tasks = await super().setup() 
         for name, stream in self._streams.items():
-            name = f"{self.name}/{name}"
-            tasks[name] = asyncio.create_task(stream(self), name = name)
-            logs.append(self.VERBOSE_TASK.format(name, tasks[name]))
-        return tasks, logs
+            tasks.append(asyncio.create_task(
+                stream(self), name = f"{self.name}/{name}"))
+        return tasks
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Postgres.on_table(TABLE_CONFIG)
