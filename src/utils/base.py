@@ -21,7 +21,6 @@ class Config(NamedTuple):
     SESSION_NAME: str = __name__
     LOG_TO_FILE: bool = True
     LOG_TO_LDB: bool = False
-    DEBUG_MODE: bool = False
     FOLDER_ROOT: Path = _FOLDER_ROOT
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __repr__(self): return str.join("\n => ",

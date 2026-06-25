@@ -21,7 +21,7 @@ if (__name__ == "__main__"):
     name: str = getattr(parser.parse_args(), "connector", None)
     assert isinstance(name, str), "Connector name is required"
     agents = {
-        "collector": Aggregator
+        "aggregator": Aggregator
     }
     agent: BaseAgent = agents.get(name.lower(), None)
     if agent is None: parser.error(f"\"{name}\" not found")

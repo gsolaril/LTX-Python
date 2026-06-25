@@ -4,7 +4,8 @@ from getpass import getpass
 from dataclasses import dataclass, field
 from pandas import Timestamp, Timedelta
 from typing import Any, ClassVar, NamedTuple
-from src.models import BaseAgent, Symbol, TimeFrame
+from src.models import Symbol, TimeFrame
+from src.models import BaseAgent, Quote
 from src.utils import *
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
@@ -74,7 +75,8 @@ class Connector(BaseAgent):
     def __post_init__(self):
         super().__post_init__()
         self._streams = dict[str, object]()
-        self._symbols_new = set[str]()
+        self._subs_new = dict[str, set]()
+        self._subs_old = dict[str, set]()
         self._sockets = dict[str, Any]()
         self._offset = Timedelta(0)
 
@@ -82,8 +84,9 @@ class Connector(BaseAgent):
     async def setup(self):
         tasks = await super().setup() 
         for name, stream in self._streams.items():
+            stream_name = f"{self.name}/{name}"
             tasks.append(asyncio.create_task(
-                stream(self), name = f"{self.name}/{name}"))
+                stream(self), name = stream_name))
         return tasks
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -92,6 +95,8 @@ class Connector(BaseAgent):
         await self.update_config(conn)
         await self.update_specs(conn)
 
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def get_stream_names(self, streams: set[str]): ...
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update_config(self, conn: asyncpg.Connection):
         FIELDS, TABLE = self.FIELDS_STR, self.TABLE_CONFIG
@@ -125,6 +130,15 @@ class Connector(BaseAgent):
         for item in result: self._specs[item["symbol"]] = Symbol(**item)
         while (len(self._specs) >= self.maxlen): self._specs.popitem(last = False)
 
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def update_verbose(self):
+        verbose = f"Config for \"{self.VENUE}\" updated:"
+        for field in self.__dataclass_fields__.keys():
+            if field[0].isupper(): continue
+            value = getattr(self, field)
+            verbose += f"\n => \"{field}\": {value!r}"
+        Log.info(verbose)
+
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄
@@ -133,6 +147,17 @@ class DataConnector(Connector):
     symbols: set[str] = field(init = False,
       kw_only = True, default_factory = set)
     STREAM_PREFIX: ClassVar[str] = "DATA"
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def get_stream_names(self, streams: set[str]):
+        kw = {"venue": self.VENUE, "symbol": None}
+        stream_names = set[str]()
+        for symbol in streams:
+            kw["symbol"] = symbol
+            stream_names.add(
+                Quote.STREAM_KEY.format(tf = "T1", **kw))
+            for tf in TimeFrame: stream_names.add(
+                Quote.STREAM_KEY.format(tf = tf.name, **kw))
+        return stream_names
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update_config(self, conn: asyncpg.Connection):
         config: dict = await super().update_config(conn)
@@ -140,26 +165,26 @@ class DataConnector(Connector):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Postgres.on_table(Connector.TABLE_CONFIG)
     async def reconfig(self, conn: asyncpg.Connection):
-        self._symbols_new = set[str]()
-        self._symbols_old = set[str]()
+        symbols_new, symbols_old = set[str](), set[str]()
         symbols_config = await self.update_config(conn)
         for symbol, keep in dict.items(symbols_config):
             available = (symbol in self.symbols)
             if available and keep: continue
             elif available and not keep:
-                self._symbols_old.add(symbol)
                 self.symbols.remove(symbol)
+                symbols_old.add(symbol)
             elif not available and keep:
-                self._symbols_new.add(symbol)
                 self.symbols.add(symbol)
+                symbols_new.add(symbol)
 
         await self.update_specs(conn, self.symbols)
-        verbose = f"Config for \"{self.VENUE}\" updated:"
-        for field in self.__dataclass_fields__.keys():
-            if field[0].isupper(): continue
-            value = getattr(self, field)
-            verbose += f"\n => \"{field}\": {value!r}"
-        Log.info(verbose)
+        streams = self.get_stream_names(symbols_new)
+        if streams: await Redis.add_streams(streams, self)
+        for name in self._subs_new.keys():
+            self._subs_new[name].update(symbols_new)
+            self._subs_old[name].update(symbols_old)
+        
+        self.update_verbose()
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

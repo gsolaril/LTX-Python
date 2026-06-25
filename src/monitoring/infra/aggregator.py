@@ -1,5 +1,6 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 import asyncio
+from typing import ClassVar
 from pandas import Series, DataFrame
 from pandas import Timestamp, Timedelta
 from dataclasses import dataclass, field
@@ -23,6 +24,8 @@ class StreamingBundle(Bundle):
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class Aggregator(BaseAgent):
     freq_scan: int = field(init = False, kw_only = True, default = 60)
+    TS_TICKS: ClassVar[str] = "history_ticks"
+    TS_CANDLES: ClassVar[str] = "history_candles"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
@@ -53,12 +56,12 @@ class Aggregator(BaseAgent):
         __dict__ = lambda X: X.__dict__
         gen_series = map(__dict__, series)
         return DataFrame(gen_series)
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @ClickHouse.to_series(TS_TICKS := "history_ticks")
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @ClickHouse.to_series(series = TS_TICKS)
     def write_ticks(self, series: list[Tick]):
         return self.write(series).set_index(Tick.INDEX_KEYS)
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @ClickHouse.to_series(TS_CANDLES := "history_candles")
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @ClickHouse.to_series(series = TS_CANDLES)
     def write_candles(self, series: list[Candle]):
         return self.write(series).set_index(Candle.INDEX_KEYS)
 

@@ -88,18 +88,18 @@ class DataBinance(DataConnectorWS, Binance):
     CHANNEL_KEY_TICK: ClassVar[str] = ...
     CHANNEL_KEY_KLINE: ClassVar[str] = ...
     SYMBOL_KEY_KLINE: ClassVar[str] = "ps"
-    KLINE_EVENT: ClassVar[str] = ...
+    EVENT_KLINE: ClassVar[str] = ...
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self): super().__init__(
-        ticks = DataStreamWS(name = self.__class__.__name__ + "/ticks",
+        ticks = DataStreamWS(name = "ticks",
             get_subs = self.get_subs_ticks, on_message = self.on_ticks,
             on_ping = self.on_ping, url_args = self.get_url_headers_ticks),
-        klines = DataStreamWS(name = self.__class__.__name__ + "/klines",
+        klines = DataStreamWS(name = "klines",
             get_subs = self.get_subs_klines, on_message = self.on_klines,
             on_ping = self.on_ping, url_args = self.get_url_headers_klines))
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def get_urlh(self, path: str):
         base = self.url or type(self).URL_WS
         if not base:
@@ -145,7 +145,7 @@ class DataBinance(DataConnectorWS, Binance):
     async def on_klines(self, data: Dict):
         if (data := data.get("data", None)) is None: return
         if (event := data.get("e", None)) is None: return
-        if (event != self.KLINE_EVENT): return
+        if (event != self.EVENT_KLINE): return
         symbol = data.get(self.SYMBOL_KEY_KLINE, None)
         if symbol is None: return
 

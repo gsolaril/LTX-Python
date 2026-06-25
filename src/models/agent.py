@@ -5,7 +5,7 @@ from typing import Any, ClassVar, Callable
 from dataclasses import dataclass, field
 from pandas import Timestamp, Timedelta
 from loguru import logger as Log
-from misc import Symbol
+from .misc import Symbol
 from src.utils import Postgres, Redis
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
@@ -16,6 +16,7 @@ class BaseAgent:
     name: str = field(init = False, kw_only = True, default = None)
     url: str = field(init = False, kw_only = True, default = None)
     maxlen: int = field(init = False, kw_only = True, default = 10000)
+    debug: bool = field(init = False, kw_only = True, default = False)
     active: bool = field(init = False, kw_only = True, default = False)
     freq_report: int = field(init = False, kw_only = True, default = 600)
     last_written: Timestamp = field(init = False, kw_only = True, default = None)

@@ -4,10 +4,11 @@ from pandas import DataFrame, Timestamp, Timedelta
 from logger import Log, LokiClient
 from typing import Any, Callable, ClassVar
 from redis.asyncio import Redis as RedisClient
+from redis.exceptions import ResponseError
 from clickhouse_driver import Client as ClickHouseClient
 from base import DOCKER, DEFAULT_HOST, STARTUP_ERRORS
 from base import Config, Credentials
-from utils import Queue, Reporter
+from misc import Queue, Reporter
 
 EventLoop: asyncio.AbstractEventLoop
 EventLoop = asyncio.new_event_loop()
@@ -17,9 +18,7 @@ asyncio.set_event_loop(EventLoop)
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 Log.remove(0)
 
-args = {"backtrace": False, "colorize": True, "serialize": False,
-            "level": "DEBUG" if Config.DEBUG_MODE else "INFO"}
-
+args = {"backtrace": False, "colorize": True, "serialize": False, "level": "DEBUG"}
 Log.add(**args, sink = sys.stdout, format = LokiClient.LOG_FORMAT["stdout"])
 Log.info(f"Logging to stdout...")
 
@@ -83,9 +82,8 @@ class PostgresManager:
         self._queue.put_nowait(payload)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def __call__(self, src: Any):
-        maxlen = getattr(src, "maxlen", 10000)
-        self._queue = Queue(maxsize = maxlen)
         conn = await self._client.acquire()
+        self._queue = Queue(maxsize = src.maxlen)
         verbose = "Postgres listeners started:"
         for func in self._to_listen.values():
             await func(src, conn)
@@ -155,6 +153,7 @@ class RedisManager:
         self._client: RedisClient = client
         self._reporter = Reporter(name = "RedisManager")
         self._ready = asyncio.Event()
+        self._streams = set[str]()
         self._ncp = 0.0
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def scan(self, pattern: str = STREAM_PREFIX + "|*"):
@@ -163,23 +162,33 @@ class RedisManager:
     async def xreadgroup(self, src: Any, group: RedisGroup,
                         streams: dict[str, str], *args, **kwargs):
         consumer = src.__class__.__name__
-        name: str = getattr(src, "name", None)
-        if name: consumer = consumer + "|" + name
+        if src.name: consumer += "|" + src.name
         return await self._client.xreadgroup(group.name,
-                    consumer, streams, *args, **kwargs)
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def xcreategroups(self, stream: str):
-        for group in RedisGroup.__members__:
-            await self._client.xgroup_create(stream, group, 
-                  RedisGroup[group].value, mkstream = True)
+                      consumer, streams, *args, **kwargs)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def xcreategroups(self, stream: str, *, mkstream: bool = True):
+        for group, value in RedisGroup.__members__.items():
+            try: await self._client.xgroup_create(
+                    stream, group, value, mkstream)
+            except ResponseError as EXC:
+                if "BUSY" not in str(EXC):
+                    Log.exception(EXC); raise
+            mkstream = False
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def add_streams(self, streams: list[str], src: Any):
+        for stream in streams:
+            stream = str.join("|", [self.STREAM_PREFIX, src.STREAM_PREFIX, stream])
+            if stream in self._streams: continue
+            mkstream = not await self._client.exists(stream)
+            await self.xcreategroups(stream, mkstream = mkstream)
+            self._streams.add(stream)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def wait(self):
         return await self._ready.wait()
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def report(self, src: Any):
-        freq_report = getattr(src, "freq_report", 600)
-        freq_report = Timedelta(seconds = freq_report)
-        next_at = Timestamp.now("UTC").ceil(freq_report)
+        freq = Timedelta(seconds = src.freq_report)
+        next_at = Timestamp.now("UTC").ceil(freq)
         report = self._reporter.to_string(next_at)
         if report: Log.info(report)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -195,7 +204,7 @@ class RedisManager:
             return wrapped
         if func is None: return decorator
         return decorator(func)
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def __call__(self, src: Any):
         self._queue = Queue(maxsize = src.maxlen,
             checkpoints = self.CHECKPOINTS.copy())
@@ -209,10 +218,9 @@ class RedisManager:
                     suffix, time, payload = payload.values()
                     id = str(time)[: -3] + "-" + str(time)[-3 :]
                     stream = str.join("|", [self.STREAM_PREFIX, src.STREAM_PREFIX, suffix])
-                    if not await self._client.exists(stream): await self.xcreategroups(stream)
+                    if stream not in self._streams: await self.add_streams([suffix], src)
                     assert (await self._client.xadd(stream, payload, id, src.maxlen))
-                    if Config.DEBUG_MODE:
-                        Log.debug(self.VERBOSE_XADD.format(N, stream, id, payload))
+                    if src.debug: Log.debug(self.VERBOSE_XADD.format(N, stream, id, payload))
                     self._reporter.add(suffix)
                 except Exception as EXC: Log.error(
                     self.VERBOSE_ERROR.format(stream, payload), EXC)
