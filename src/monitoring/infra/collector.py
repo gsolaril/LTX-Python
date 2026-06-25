@@ -1,94 +1,96 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 import os, sys, asyncio
-from pathlib import Path
-from argparse import ArgumentParser
-from typing import Any, Callable, ClassVar
-from pandas import Series, DataFrame, Timestamp, Timedelta
-from pandas import concat, Index, DatetimeIndex, MultiIndex
-
-_ROOT = Path(__file__).resolve().parents[2]
-_SRC = _ROOT / "src"
-for _path in (_ROOT, _SRC, _SRC / "models", _SRC / "utils"):
-    if str(_path) not in sys.path:
-        sys.path.insert(0, str(_path))
-
+from dataclasses import dataclass, field
+from pandas import Series, DataFrame
+from pandas import Timestamp, Timedelta
 from src.models import *
 from src.utils import *
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class Collector:
-    DEFAULT_MAXLEN = 100000
-    DEFAULT_FREQ_SCAN = 60
-    DEFAULT_FREQ_REPORT = 300
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __init__(self, maxlen: int = DEFAULT_MAXLEN,
-                 freq_scan: int = DEFAULT_FREQ_SCAN,
-                 freq_report: int = DEFAULT_FREQ_REPORT):
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class StreamingBundle(Bundle):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄
+    def on_tick(self, tick: Tick):
+        super().on_tick(tick)
+        return tick
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def on_candle(self, candle: Candle):
+        super().on_candle(candle)
+        return candle
 
-        self.maxlen = maxlen
-        self.freq_scan = Timedelta(seconds = freq_scan)
-        self.bundle, self.xstreams = Bundle(), dict[str, str]()
-        self.reports = {"*Scanning": Report("*Scanning")}
-        self._crons = {
-            self.scan: Timedelta(seconds = freq_scan),
-            self.report: Timedelta(seconds = freq_report)}
-        self._ready = asyncio.Event()
+#▄▄▄▄▄▄▄▄▄▄▄
+@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class Collector(BaseAgent):
+    freq_scan: int = field(init = False, kw_only = True, default = 60)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __post_init__(self):
+        super().__post_init__()
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def start_cron(self, cron: Callable):
-        now = Timestamp.now("UTC")
-        freq = self._crons[cron]
-        next = now.floor(freq)
-        while True:
-            await asyncio.sleep(0.1)
-            now = Timestamp.now("UTC")
-            if (now < next): continue
-            next = now.ceil(freq)
-            try: await cron()
-            except Exception as EXC:
-                Log.exception(EXC)
+        self._xstreams = dict[str, str]()
+        self._reporter = Reporter(name = "Collector")
+        self._bundle = StreamingBundle(maxlen = self.maxlen)
+        self._crons[self.scan] = Timedelta(seconds = self.freq_scan)
+        self._crons[self.report] = Timedelta(seconds = self.freq_report)
+        self._crons[self.resample] = Timedelta(seconds = TimeFrame.MIN.value)
+        self._scan_ready = asyncio.Event()
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def resample(self):
+        last = Timestamp.now("UTC").floor(TimeFrame.MIN.value)
+        ticks, candles = self._bundle.resample_ticks(last)
+        candles.extend(self._bundle.resample_candles(last))
+
+        __dict__ = lambda X: X.__dict__
+        gen_tick = map(__dict__, ticks)
+        gen_candle = map(__dict__, candles)
+        dft = DataFrame(gen_tick).set_index(Tick.INDEX_KEYS)
+        dfc = DataFrame(gen_candle).set_index(Candle.INDEX_KEYS)
+        if not dft.empty: ClickHouse.push("history_ticks", dft)
+        if not dfc.empty: ClickHouse.push("history_candles", dfc)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def scan(self):
         new = set[str]()
+        self._reporter.add("*Scanning")
         async for stream in Redis.scan():
-            if not stream in self.xstreams:
-                self.reports[stream] = Report(stream)
-                self.xstreams[stream] = ">"
+            if not stream in self._xstreams:
+                self._reporter.add(stream)
+                self._xstreams[stream] = ">"
                 new.add(stream)
-        self._ready.set()
-        self.reports["*Scanning"]._incr()
+        self._scan_ready.set()
         if not new: return
         new_str = str.join(", ", sorted(new))
         Log.info(f"New streams:\n => {new_str}")
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def report(self):
-        next_at = Timestamp.now("UTC").ceil(self._crons[self.report])
-        Log.info(Report.multi_close(self.reports.values(), next_at))
+        freq = self._crons[self.report]
+        next_at = Timestamp.now("UTC").ceil(freq)
+        Log.info(self._reporter.to_string(next_at))
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def process(self, stream: str, message_id: str, payload: dict):
-        self.reports[stream]._incr()
+        self._reporter.add(stream)
         ms, us = map(int, message_id.split("-"))
-        prefix1, prefix2, venue, symbol, tfs = stream.split("|")
+        _, _, venue, symbol, tfs = stream.split("|")
         payload["symbol"] = Symbol(venue = venue, symbol = symbol)
         payload["time"] = Timestamp(ms * 1e3 + us, unit = "us", tz = "UTC")
         if (tfs == "T1"):
-            self.bundle.on_tick(Tick(**payload))
+            self._bundle.on_tick(Tick(**payload))
         elif tfs in TimeFrame:
             payload["tf"] = TimeFrame[tfs]
-            self.bundle.on_candle(Candle(**payload))
+            self._bundle.on_candle(Candle(**payload))
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def main(self):
-        await self._ready.wait()
+        await self._scan_ready.wait()
         while True:
             try:
                 response = await Redis.xreadgroup(self,
-                    RedisGroup.MONITOR, self.xstreams)
+                    RedisGroup.MONITOR, self._xstreams)
                 if not response: continue
                 for stream, messages in response:
                     for message_id, payload in messages:
@@ -115,12 +117,3 @@ class Collector:
         
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-if (__name__ == "__main__"):
-
-    parser = ArgumentParser()
-    parser.add_argument("maxlen", nargs = "?", type = int, default = 10000)
-    args = parser.parse_args()
-    maxlen = args.maxlen
-    collector = Collector(maxlen)
-    EventLoop.run_until_complete(collector.start())

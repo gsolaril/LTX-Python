@@ -71,94 +71,26 @@ class Venue(metaclass = Meta):
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄
-class Connector:
-    name: str = field(init = False, kw_only = True, default = None)
-    url: str = field(init = False, kw_only = True, default = None)
-    maxlen: int = field(init = False, kw_only = True, default = 10000)
-    active: bool = field(init = False, kw_only = True, default = False)
-    freq_report: int = field(init = False, kw_only = True, default = 600)
-    last_written: Timestamp = field(init = False, kw_only = True, default = None)
-    last_updated: Timestamp = field(init = False, kw_only = True, default = None)
-
+@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class Connector(BaseAgent):
     VENUE: ClassVar[str] = ...
-    STREAM_PREFIX: ClassVar[str] = ...
     TABLE_CONFIG: ClassVar[str] = "connectors"
-    TABLE_SYMBOLS: ClassVar[str] = "symbol_specs"
-    VERBOSE_XADD_OK: ClassVar[str] = "[Q{0}] \"{1}\" XADD @ {2} => {3}"
-    VERBOSE_XADD_ERROR: ClassVar[str] = "\"{0}\" XADD failed:\n => {1}"
-    VERBOSE_TASK = " => {0}: {1!r}"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
-        self.name = self.__class__.__name__
+        super().__post_init__()
         self._streams = dict[str, object]()
-        self._specs = OrderedDict[str, Symbol]()
-        self._crons = dict[Callable, Timedelta]()
-        self._tasks = dict[str, asyncio.Task]()
         self._symbols_new = set[str]()
         self._sockets = dict[str, Any]()
         self._offset = Timedelta(0)
 
-        fields = list()
-        for field in self.__dataclass_fields__:
-            if not field[0].islower(): continue
-            fields.append(field)
-        self._FIELDS = str.join(", ", fields)
-
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def start_cron(self, cron: Callable):
-        class_name = self.__class__.__name__
-        cron_name = class_name + "/cron/" + cron.__name__
-        error = f"\"{cron_name}\" cron loop failed"
-        next = Timestamp.min.tz_localize("UTC")
-        while self.active:
-            if (now := Timestamp.now("UTC")) < next:
-                await asyncio.sleep(0.5) ; continue
-            next = now.ceil(self._crons[cron])
-            try: await cron(self)
-            except Exception as EXC:
-                Log.exception(error, EXC)
-            
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def start(self):
-        try:
-            self.active = True
-            logs = list[str]()
-            class_name = self.__class__.__name__
-
-            name = f"{class_name}/Manager/Postgres"
-            self._tasks[name] = asyncio.create_task(
-                Postgres(self), name = name)
-            logs.append(self.VERBOSE_TASK.format(name, self._tasks[name]))
-            await Postgres.wait()
-
-            name = f"{class_name}/Manager/Redis"
-            self._tasks[name] = asyncio.create_task(
-                Redis(self), name = name)
-            logs.append(self.VERBOSE_TASK.format(name, self._tasks[name]))
-            await Redis.wait()
-
-            self._crons[Redis.report] = Timedelta(seconds = self.freq_report)
-            for cron in self._crons.keys():
-                name = f"{class_name}/cron/{cron.__name__}"
-                self._tasks[name] = asyncio.create_task(
-                    self.start_cron(cron), name = name)
-                logs.append(self.VERBOSE_TASK.format(name, self._tasks[name]))
-
-            for name, stream in self._streams.items():
-                name = f"{class_name}/{name}"
-                self._tasks[name] = asyncio.create_task(stream(self), name = name)
-                logs.append(self.VERBOSE_TASK.format(name, self._tasks[name]))
-
-            verbose = f"Started {len(self._tasks)} tasks in \"{class_name}\":"
-            Log.info(verbose + "\n" + str.join("\n", logs))
-            results = await asyncio.gather(*self._tasks.values(), return_exceptions = True)
-            for result in results:
-                if (result is not None): raise result
-        
-        except KeyboardInterrupt: Log.success("Exiting...")
-        except Exception as EXC: Log.exception(EXC)
-        finally: self.active = False
+    async def setup(self):
+        tasks, logs = await super().setup() 
+        for name, stream in self._streams.items():
+            name = f"{self.name}/{name}"
+            tasks[name] = asyncio.create_task(stream(self), name = name)
+            logs.append(self.VERBOSE_TASK.format(name, tasks[name]))
+        return tasks, logs
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Postgres.on_table(TABLE_CONFIG)
@@ -168,7 +100,7 @@ class Connector:
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update_config(self, conn: asyncpg.Connection):
-        FIELDS, TABLE = self._FIELDS, self.TABLE_CONFIG
+        FIELDS, TABLE = self.FIELDS_STR, self.TABLE_CONFIG
         query = f"SELECT {FIELDS} FROM {TABLE} WHERE (name = '{self.VENUE}');"
         row = await conn.fetchrow(query)
         if row is None:

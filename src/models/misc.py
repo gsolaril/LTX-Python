@@ -1,6 +1,7 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import os, sys
-from typing import Any, List, ClassVar
+import os, sys, asyncio
+from collections import defaultdict, OrderedDict
+from typing import Any, List, ClassVar, Callable
 from dataclasses import dataclass, field, Field
 from pandas import DataFrame, Timestamp, Timedelta
 from enum import Enum, EnumMeta
@@ -9,8 +10,8 @@ from sympy import divisors
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class Meta(type):
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class DBClassMeta(type):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __new__(mcls: type, name: str, bases: tuple[type], namespace: dict[str, Any]):
         cls = super().__new__(mcls, name, bases, namespace)
@@ -33,8 +34,8 @@ class Meta(type):
         return cls
 
 #▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class DBClass(metaclass = Meta):
+@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class DBClass(metaclass = DBClassMeta):
     id: str = field(kw_only = True)
     SQL_TZ_FORMAT: ClassVar[str] = "TIMESTAMP('T%Y-%m-%d %H:%M:%S.%f') AT TIME ZONE 'UTC'"
     SEP: ClassVar[str] = " "
@@ -134,8 +135,8 @@ class Symbol(DBClass):
         
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class Meta(EnumMeta):
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class TimeFrameMeta(EnumMeta):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __new__(mcls, name: str, bases: tuple[type], namespace: dict[str, Any]):
         cls = super().__new__(mcls, name, bases, namespace)
@@ -153,8 +154,8 @@ class Meta(EnumMeta):
         cls.RATIO = int(cls.MAX.value / cls.MIN.value)
         return cls
 
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class TimeFrame(Enum, metaclass = Meta):
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class TimeFrame(Enum, metaclass = TimeFrameMeta):
     MIN: "TimeFrame"; MAX: "TimeFrame"; RATIO: int
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     S1, S2, S3, S4, S5, S6, S10, S12, S15, S20, S30 \
@@ -212,11 +213,6 @@ class TimeFrame(Enum, metaclass = Meta):
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class BaseAgent:
-    maxlen: int; active: bool; freq_report: int
-    STREAM_PREFIX: ClassVar[str] = ...
-
 #▄▄▄▄▄▄▄▄▄▄▄
 class Report:
     PRINT_LIMIT = 50
@@ -227,8 +223,8 @@ class Report:
         self._batch_at = self._entry_at = None
         self._last_count = self._mean_count = 0
         self._batches = self._total_count = 0
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def _incr(self, count: int = 1):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def _add(self, count: int):
         if (self._batch_at is None):
             self._batch_at = Timestamp.now("UTC")
         self._last_count = self._last_count + count
@@ -246,29 +242,45 @@ class Report:
         "batch_at": self._batch_at, "last_count": self._last_count, 
         "entry_at": self._entry_at, "mean_count": self._mean_count,
         "batches": self._batches, "total_count": self._total_count}
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄   
-    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def multi_close(cls, reports: list[Report], next_at: Timestamp = None):
-        closed = list[Report]()
-        for report in reports:
-            closed.append(report.__dict__)
+
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class Reporter(defaultdict[str, Report]):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, *keys, name: str = "Reporter", print_limit: int = 50):
+        super()({key: Report(key) for key in keys})
+        self.start_at = Timestamp.now("UTC")
+        self.print_limit = print_limit
+        self.name = name
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def add(self, key: str, count: int = None):
+        if (key not in self): self[key] = Report(key)
+        if count and (count > 0): self[key]._add(count)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def close_batch(self):
+        for report in self.values():
             report._close_batch()
-        df = DataFrame(closed)
+    #▄▄▄▄▄▄▄▄
+    @property
+    def df(self):
+        df = DataFrame(self.values())
         if df.dropna().empty: return
-        df = df.set_index("name")
-        df = df.rename_axis(None)
+        return df.set_index("name")
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __repr__(self): return self.to_string()
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def to_string(self, next_at: Timestamp = None):
+        df = self.df.rename_axis(None)
         if next_at is not None:
             header = f"[Next report @ {next_at:%H:%M}]"
             df = df.rename_axis(header, axis = "columns")
         df["mean_count"] = df["mean_count"].astype(int)
-        if (df.shape[0] <= cls.PRINT_LIMIT): df = df.sort_index()
-        else: df = df.sort_values("total_count", ascending = False)
-        ts_start = df["start_at"].min()
         df["start_at"] = df["start_at"].dt.strftime("%Y/%m/%d %H:%M")
         df["batch_at"] = df["batch_at"].dt.strftime("%H:%M:%S")
         df["entry_at"] = df["entry_at"].dt.strftime("%H:%M:%S.%f").str[: -3]
-        verbose = f"Redis manager ongoing since \"{ts_start}\":\n"
-        return verbose + df.to_string(max_rows = cls.PRINT_LIMIT)
+        if (df.shape[0] <= self.print_limit): df = df.sort_index()
+        else: df = df.sort_values("total_count", ascending = False)
+        verbose = f"Reporter \"{self.name}\" ongoing since \"{self.start_at}\":"
+        return verbose + "\n" + self.df.to_string(max_rows = self.print_limit)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

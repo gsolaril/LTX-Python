@@ -7,8 +7,7 @@ from pandas import DataFrame, Timestamp, Timedelta
 from logger import Log, LokiClient
 from enum import StrEnum
 from typing import Any, Callable, ClassVar
-from typing import Protocol, runtime_checkable
-from src.models import Report, BaseAgent
+from src.models import Queue, Reporter, BaseAgent
 from base import AUTH, DOCKER, DEFAULT_HOST
 from base import Config, Credentials, Vault
 from base import STARTUP_ERRORS
@@ -147,13 +146,15 @@ class RedisManager:
     VERBOSE_XADD = "[Q{}] \"{}\" XADD @ {} => {}"
     VERBOSE_CP = "Warning: Queue above {0:.0%}."
     STREAM_PREFIX: ClassVar[str] = "LTX"
-    QUEUE_CHECKPOINTS = {0.5: Log.debug,
-      0.8: Log.warning, 0.95: Log.error}
+    CHECKPOINTS = {
+        0.5: lambda value: Log.warning("Queue is {value:.0%} full!"),
+        0.8: lambda value: Log.warning("QUEUE IS {value:.0%} FULL!"),
+        0.95: lambda value: Log.critical("QUEUE IS {value:.0%} FULL!!!"),
+    }
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, client: RedisClient):
         self._client: RedisClient = client
-        self._reports = dict[str, Report]()
-        self._start_at = Timestamp.now("UTC")
+        self._reporter = Reporter(name = "RedisManager")
         self._ready = asyncio.Event()
         self._ncp = 0.0
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -180,8 +181,8 @@ class RedisManager:
         freq_report = getattr(src, "freq_report", 600)
         freq_report = Timedelta(seconds = freq_report)
         next_at = Timestamp.now("UTC").ceil(freq_report)
-        Log.info(Report.multi_close(self._reports.values(), next_at))
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+        Log.info(self._reporter.to_string(next_at))
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_stream(self, func: Callable = None):
         def decorator(func: Callable):
             @functools.wraps(func)
@@ -196,7 +197,8 @@ class RedisManager:
         return decorator(func)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def __call__(self, src: BaseAgent):
-        self._queue = asyncio.Queue(src.maxlen)
+        self._queue = Queue(maxsize = src.maxlen,
+            checkpoints = self.CHECKPOINTS.copy())
         self._ready.set()
         while src.active:
             while (N := self._queue.qsize()) == 0:
@@ -217,9 +219,7 @@ class RedisManager:
                             verbose = self.VERBOSE_CP.format(ncp)
                             self.QUEUE_CHECKPOINTS[ncp](verbose)
                             self._ncp = ncp
-                    if (suffix not in self._reports):
-                        self._reports[suffix] = Report(suffix)
-                    self._reports[suffix]._incr()
+                    self._reporter.add(suffix)
                 except Exception as EXC: Log.error(
                     self.VERBOSE_ERROR.format(stream, payload), EXC)
 
