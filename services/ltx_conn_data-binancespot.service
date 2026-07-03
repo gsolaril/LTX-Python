@@ -8,7 +8,7 @@ Type=simple
 User=gaston
 Group=gaston
 WorkingDirectory=/srv/shared/LTX-Python
-ExecStart=/srv/shared/.venv/bin/python src/connectors/main.py binancespot
+ExecStart=/srv/shared/.venv/bin/python src/connectors/main.py connector/binancespot
 Restart=on-failure
 RestartSec=5
 

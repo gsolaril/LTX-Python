@@ -1,12 +1,13 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 import sys, asyncio, json, asyncpg, functools, enum
 from pandas import DataFrame, Timestamp, Timedelta
+from typing import Any, Callable, ClassVar, Iterable
 from logger import Log, LokiClient
-from typing import Any, Callable, ClassVar
-from redis.asyncio import Redis as RedisClient
+from collections import deque
 from redis.exceptions import ResponseError
+from redis.asyncio import Redis as RedisClient
 from clickhouse_driver import Client as ClickHouseClient
-from base import DOCKER, DEFAULT_HOST, STARTUP_ERRORS
+from base import DOCKER, DEFAULT_HOST, STARTUP_ERRORS, TZ
 from base import Config, Credentials
 from misc import Queue, Reporter
 
@@ -148,7 +149,7 @@ class RedisManager:
         0.8: lambda value: Log.warning("Queue is {:.0%} full!".upper().format(value)),
         0.95: lambda value: Log.critical("Queue is {:.0%} full!".upper().format(value)),
     }
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, client: RedisClient):
         self._client: RedisClient = client
         self._reporter = Reporter(name = "RedisManager")
@@ -163,8 +164,20 @@ class RedisManager:
                         streams: dict[str, str], *args, **kwargs):
         consumer = src.__class__.__name__
         if src.name: consumer += "|" + src.name
+        kwargs.setdefault("count", 100)
+        kwargs.setdefault("block", 1000)
         return await self._client.xreadgroup(group.name,
                       consumer, streams, *args, **kwargs)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def xack(self, group: RedisGroup, stream: str, message_id: str):
+        return await self._client.xack(stream, group.name, message_id)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def ensure_groups(self, streams: list[str]):
+        for stream in streams:
+            if stream in self._streams: continue
+            mkstream = not await self._client.exists(stream)
+            await self.xcreategroups(stream, mkstream = mkstream)
+            self._streams.add(stream)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def xcreategroups(self, stream: str, *, mkstream: bool = True):
         for group, value in RedisGroup.__members__.items():
@@ -188,7 +201,8 @@ class RedisManager:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def report(self, src: Any):
         freq = Timedelta(seconds = src.freq_report)
-        next_at = Timestamp.now("UTC").ceil(freq)
+        next_at = Timestamp.now(TZ).ceil(freq)
+        self._reporter.close_batch()
         report = self._reporter.to_string(next_at)
         if report: Log.info(report)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -196,11 +210,14 @@ class RedisManager:
         def decorator(func: Callable):
             @functools.wraps(func)
             async def wrapped(*args, **kwargs):
-                obj = await func(*args, **kwargs)
-                if (obj is None): return
-                payload: dict = obj.__dict__
-                self._queue.put_nowait(payload)
-                return obj
+                gen = func(*args, **kwargs)
+                results = deque()
+                async for obj in gen:
+                    results.append(obj)
+                    if (obj is None): continue
+                    payload: dict = obj.__dict__
+                    self._queue.put_nowait(payload)
+                return results
             return wrapped
         if func is None: return decorator
         return decorator(func)
@@ -247,38 +264,46 @@ class ClickHouse:
 class ClickHouseManager:
     VERBOSE_PUSH = "Pushed {0} rows to \"{1}\":\n => {2}"
     VERBOSE_ERROR = "Failed to write to \"{0}\":"
-    QUERY_INSERT = "INSERT INTO {0} ({1}) VALUES"
+    CH_DTYPES = {type(None): lambda X: "NULL", bool: lambda X: str(X).upper(),
+          Timestamp: lambda X: Timestamp.strftime(X, "%Y-%m-%d %H:%M:%S.%f"),
+          str: lambda X: f"'{X}'"}
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, client: ClickHouseClient):
         self._client: ClickHouseClient = client
         self._ready = set[str]()
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def write(self, series: str, df: DataFrame):
-        if (df := df.copy()).empty: return 0
-        if (df.index.names != (None,)) and any(df.index.names): df = df.reset_index()
-        if ("time" in df.columns): df["time"] = df["time"].map(Timestamp.to_pydatetime)
-        rows = df.to_records(index = False).tolist()
-        query = self.QUERY_INSERT.format(series, str.join(", ", df.columns))
-        self._client.execute(query, rows, types_check = True)
-        return len(rows)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def write(self, series: str, gen: Iterable[dict]):
+        query, sep, n_rows = "", ", ", dict()
+        for row in gen:
+            line = "\n    ("
+            for value in row.values():
+                dtype = type(value)
+                dfunc = self.CH_DTYPES.get(dtype, str)
+                line = line + dfunc(value) + sep
+            query += sep + line.rstrip(sep) + ")"
+            
+        if (len(query) > 0):
+            fields, query = str.join(sep, row.keys()), query.rstrip(sep)
+            query = f"INSERT INTO {series} ({fields}) VALUES ({query}\n);"
+            n_rows = self._client.execute(query, types_check = True)
+        else: Log.warning(f"Warning: No rows written to \"{series}\"")
+        return n_rows
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def to_series(self, func: Callable, series: str):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def to_series(self, func: Callable = None, *, series: str):
         def decorator(func: Callable):
             @functools.wraps(func)
-            def wrapped(*args, **kwargs):
-                async def write():
-                    try:
-                        df: DataFrame = func(*args, **kwargs)
-                        assert (n_rows := self.write(series, df)) > 0
-                        df = df.groupby(df.index.names).size().reset_index(drop = True)
-                        Log.info(self.VERBOSE_PUSH.format(n_rows, series, df.to_string()))
-                    except AssertionError: Log.error(f"No rows written to \"{series}\"")
-                    except Exception as EXC:
-                        Log.exception(self.VERBOSE_ERROR.format(series), EXC)
-                asyncio.create_task(write())
+            async def wrapped(*args, **kwargs):
+                try:
+                    gen = func(*args, **kwargs)
+                    assert (n_rows := await asyncio.to_thread(self.write, series, gen)) > 0
+                    Log.info(self.VERBOSE_PUSH.format(sum(n_rows.values()), series, n_rows))
+                except AssertionError: Log.error(f"No rows written to \"{series}\"")
+                except Exception as EXC:
+                    Log.exception(self.VERBOSE_ERROR.format(series), EXC)
             return wrapped
+        if func is None: return decorator
         return decorator(func)
 
 #███████████████████████████████████████████████████████████████████████████████████████████

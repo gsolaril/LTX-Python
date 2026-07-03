@@ -7,6 +7,7 @@ from pandas import DataFrame, Timestamp, Timedelta
 from enum import Enum, EnumMeta
 from eth_account import Account
 from sympy import divisors
+from src.utils import TZ
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -40,6 +41,8 @@ class DBClass(metaclass = DBClassMeta):
     SQL_TZ_FORMAT: ClassVar[str] = "TIMESTAMP('T%Y-%m-%d %H:%M:%S.%f') AT TIME ZONE 'UTC'"
     SEP: ClassVar[str] = " "
     TABLE: ClassVar[str] = "some_table"
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __hash__(self): return hash(self.id)
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄
     def sql_values(self):
@@ -65,12 +68,12 @@ class Account(DBClass):
     equity: float = field(kw_only = True, default = None)
     margin: float = field(kw_only = True, default = None)
     last_updated: Timestamp = field(kw_only = True,
-      default_factory = lambda: Timestamp.now("UTC"))
+      default_factory = lambda: Timestamp.now(TZ))
     INDEX_KEYS: ClassVar[list[str]] = ["venue", "id"]
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __setattr__(self, name: str, value: Any):
         super().__setattr__(name, value)
-        super().__setattr__("last_updated", Timestamp.now("UTC"))
+        super().__setattr__("last_updated", Timestamp.now(TZ))
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def alias(self): return self.venue + self.SEP + self.id
@@ -122,17 +125,18 @@ class Symbol(DBClass):
         if self.base is None: self.base = self.symbol
         if self.id is None: self.id = self.venue + self.SEP + self.symbol
     #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def alias(self): return self.venue + self.SEP + self.symbol
     def __str__(self): return self.venue + self.SEP + self.symbol
     def __repr__(self):  return self.venue + self.SEP + self.symbol
     def __eq__(self, other: "Symbol"): return (self.id == other.id)
     def __ne__(self, other: "Symbol"): return (self.id != other.id)
+    def __hash__(self): return hash(self.id)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def is_expired(self, time: Timestamp = None):
-        if (time is None): time = Timestamp.now("UTC")
+        if (time is None): time = Timestamp.now(TZ)
         return (time >= self.expiration)
-        
+    
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -199,9 +203,9 @@ class TimeFrame(Enum, metaclass = TimeFrameMeta):
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def updatable(cls, time: Timestamp = None, mtf: "TimeFrame" = None):
         if (mtf is None): mtf = TimeFrame.MIN
-        if (time is None): time = Timestamp.now("UTC")
+        if (time is None): time = Timestamp.now(TZ)
         tf_div: List[TimeFrame] = None; tf_max: TimeFrame = None
-        td = time.floor(cls.S1.value) - time.floor(cls.D1.value)
+        td = time.floor(cls.MIN.value) - time.floor(cls.MAX.value)
         for tf_max in reversed(cls):
             if not (td % tf_max.value): break
         _divisors = getattr(cls, "_DIVISORS")
@@ -239,7 +243,7 @@ if (__name__ == "__main__"):
     print(" >> S1 != S2 =", TimeFrame.S1 != TimeFrame.S2)
     print(" >> S1 >= S2 =", TimeFrame.S1 >= TimeFrame.S2)
     mtf = TimeFrame.H1
-    time = Timestamp.now("UTC").ceil("3h")
+    time = Timestamp.now(TZ).ceil("3h")
     print(f"Divisors for \"{time:%H:%M:%S}\" starting from \"{mtf.name}\":")
     result_iter = TimeFrame.updatable(time, mtf)
     for tf_upd, tf_opt in result_iter:
@@ -247,5 +251,5 @@ if (__name__ == "__main__"):
 
     symbol = Symbol(id = "BINANCE BTCUSDT", venue = "BINANCE", symbol = "BTCUSDT",
     quote = "USDT", base = "BTC", min_price_diff = 0.01, min_order_size = 0.001,
-    expiration = Timestamp.now("UTC").ceil("1h"))
+    expiration = Timestamp.now(TZ).ceil("1h"))
     print(TimeFrame(Timedelta(seconds = 300)))

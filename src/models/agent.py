@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pandas import Timestamp, Timedelta
 from loguru import logger as Log
 from .misc import Symbol
-from src.utils import Postgres, Redis
+from src.utils import Postgres, Redis, TZ
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -51,10 +51,14 @@ class BaseAgent:
         error = f"\"{cron_name}\" cron loop failed"
         next = Timestamp.min.tz_localize("UTC")
         while self.active:
-            if (now := Timestamp.now("UTC")) < next:
+            if (now := Timestamp.now(TZ)) < next:
                 await asyncio.sleep(0.5) ; continue
             next = now.ceil(self._crons[cron])
-            try: await cron(self)
+            try:
+                if getattr(cron, "__self__", None) is self:
+                    await cron()
+                else:
+                    await cron(self)
             except Exception as EXC:
                 Log.exception(error, EXC)
 

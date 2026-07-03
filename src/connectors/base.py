@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pandas import Timestamp, Timedelta
 from typing import Any, ClassVar, NamedTuple
 from src.models import Symbol, TimeFrame
-from src.models import BaseAgent, Quote
+from src.models import BaseAgent, Quote, Bundle
 from src.utils import *
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
@@ -66,19 +66,32 @@ class Venue:
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class StreamingBundle(Bundle):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def resample(self, time: Timestamp = None):
+        for candle in super().resample(): yield candle
+
+#███████████████████████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class Connector(BaseAgent):
     VENUE: ClassVar[str] = ...
     TABLE_CONFIG: ClassVar[str] = "connectors"
+    IGNORE_TFS: ClassVar[set[TimeFrame]] = set()
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
+        self._offset = Timedelta(0)
         self._streams = dict[str, object]()
         self._subs_new = dict[str, set]()
         self._subs_old = dict[str, set]()
         self._sockets = dict[str, Any]()
-        self._offset = Timedelta(0)
+        self._bundle = StreamingBundle(
+              maxlen = 60, ignore_tfs = self.IGNORE_TFS.copy())
+        self._crons[self._bundle.resample] = TimeFrame.MIN.value
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def setup(self):
@@ -86,7 +99,7 @@ class Connector(BaseAgent):
         for name, stream in self._streams.items():
             stream_name = f"{self.name}/{name}"
             tasks.append(asyncio.create_task(
-                stream(self), name = stream_name))
+              stream(self), name = stream_name))
         return tasks
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -102,12 +115,12 @@ class Connector(BaseAgent):
         FIELDS, TABLE = self.FIELDS_STR, self.TABLE_CONFIG
         query = f"SELECT {FIELDS} FROM {TABLE} WHERE (name = '{self.VENUE}');"
         row = await conn.fetchrow(query)
-        if row is None:
-            return Log.error(f"No config found for \"{self.VENUE}\":\n => {query}")
+        if row is None: return Log.error(
+            f"No config found for \"{self.VENUE}\":\n => {query}")
         config = dict[str, Any](row)
         report_freq = Timedelta(seconds = config["freq_report"])
         self._crons[Redis.report] = report_freq
-        self.last_updated = Timestamp.now("UTC")
+        self.last_updated = Timestamp.now(TZ)
         symbols = config.pop("symbols", None)
         if symbols: symbols = json.loads(symbols)
         config["symbols"] = symbols
@@ -119,9 +132,9 @@ class Connector(BaseAgent):
     
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update_specs(self, conn: asyncpg.Connection, symbols: set = None):
+        if (symbols is None): symbols = set(self._specs)
         TABLE, VENUE = self.TABLE_SYMBOLS, self.VENUE
         query = f"SELECT * FROM {TABLE} WHERE (venue = '{VENUE}')"
-        if (symbols is None): symbols = set(self._specs)
         if (len(symbols) > 0): 
             symbols_str = str.join(", ", [f"'{S}'" for S in symbols])
             query = query + " AND (symbol IN ({}))".format(symbols_str)

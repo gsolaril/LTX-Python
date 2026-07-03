@@ -3,6 +3,7 @@ import asyncio
 from collections import defaultdict
 from pandas import DataFrame, Timestamp
 from typing import Any, Callable
+from base import TZ
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ 
@@ -53,22 +54,22 @@ class Report:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, name: str):
         self._name = name
-        self._start_at = Timestamp.now("UTC")
+        self._start_at = Timestamp.now(TZ)
         self._batch_at = self._entry_at = None
         self._last_count = self._mean_count = 0
         self._batches = self._total_count = 0
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def _add(self, count: int):
         if (self._batch_at is None):
-            self._batch_at = Timestamp.now("UTC")
+            self._batch_at = Timestamp.now(TZ)
         self._last_count = self._last_count + count
         self._total_count = self._total_count + count
-        self._entry_at = Timestamp.now("UTC")
+        self._entry_at = Timestamp.now(TZ)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def _close_batch(self):
         self._batches, self._last_count = self._batches + 1, 0
         self._mean_count = self._total_count / self._batches
-        self._batch_at = Timestamp.now("UTC")
+        self._batch_at = Timestamp.now(TZ)
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __dict__(self): return {
@@ -83,13 +84,13 @@ class Reporter(defaultdict[str, Report]):
     def __init__(self, *keys, name: str = "Reporter", print_limit: int = 50):
         super().__init__()
         for key in keys: self[key] = Report(key)
-        self.start_at = Timestamp.now("UTC")
+        self.start_at = Timestamp.now(TZ)
         self.print_limit = print_limit
         self.name = name
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def add(self, key: str, count: int = None):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def add(self, key: str, count: int = 1):
         if (key not in self): self[key] = Report(key)
-        if count and (count > 0): self[key]._add(count)
+        if (count > 0): self[key]._add(count)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def close_batch(self):
         for report in self.values():

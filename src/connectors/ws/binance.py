@@ -30,7 +30,7 @@ class Binance(Venue):
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def sign_payload(cls, payload: Dict[str, Any]):
         payload = payload.copy()
-        ms = Timestamp.utcnow().timestamp() * 1e3
+        ms = Timestamp.now(TZ).timestamp() * 1e3
         payload.setdefault("timestamp", int(ms))
         payload.setdefault("recvWindow", 5000)
         payload["signature"] = cls.signature(payload)
@@ -102,8 +102,8 @@ class DataBinance(DataConnectorWS, Binance):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def get_urlh(self, path: str):
         base = self.url or type(self).URL_WS
-        if not base:
-            raise ValueError(f"{self.__class__.__name__}: websocket url not configured")
+        if not base: raise ValueError(
+            f"{self.name}: websocket url not configured")
         return {"url": base.rstrip("/") + "/" + path.lstrip("/")} 
     async def get_url_headers_ticks(self): return await self.get_urlh(self.STREAM_PATH_TICK)
     async def get_url_headers_klines(self): return await self.get_urlh(self.STREAM_PATH_KLINE)
@@ -134,12 +134,14 @@ class DataBinance(DataConnectorWS, Binance):
         if symbol is None: return
 
         tse = data.get("E", None)
-        if (tse is not None): ts = Timestamp.utcfromtimestamp(int(tse) / 1e3)
-        ts = Timestamp.utcnow()
+        if (tse is not None): ts = Timestamp.fromtimestamp(int(tse) / 1e3, TZ)
+        ts = Timestamp.now(TZ)
         symbol = self._specs.get(self.symbol_to_local(symbol), None)
-        if symbol is None: return None
-        return Tick(symbol = symbol, time = ts, pa = data["a"],
-                qa = data["A"], pb = data["b"], qb = data["B"])
+        if symbol is None: return
+        tick = Tick(symbol = symbol, time = ts, pa = data["a"],
+               qa = data["A"], pb = data["b"], qb = data["B"])
+        self._bundle.on_tick(tick)
+        yield tick
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_klines(self, data: Dict):
@@ -155,14 +157,16 @@ class DataBinance(DataConnectorWS, Binance):
         tf_str = data.get("i", None)
         closed = data.get("x", False)
         if not tse or not tf_str or not closed: return
-        ts = Timestamp.utcfromtimestamp(int(tse) / 1000) + self._offset
-        ts = Timestamp.utcnow()
+        ts = Timestamp.fromtimestamp(int(tse) / 1000, TZ) + self._offset
+        ts = Timestamp.now(TZ)
         symbol = self._specs.get(self.symbol_to_local(symbol), None)
-        if symbol is None: return None
-        return Candle(symbol = symbol, 
-            time = ts, tf = TimeFrame.swap_tn(tf_str), volume = data["n"],
-            oa = data["o"], ha = data["h"], la = data["l"], ca = data["c"],
-            ob = data["o"], hb = data["h"], lb = data["l"], cb = data["c"])
+        if symbol is None: return
+        candle = Candle(symbol = symbol, 
+              time = ts, tf = TimeFrame.swap_tn(tf_str), volume = data["n"],
+              oa = data["o"], ha = data["h"], la = data["l"], ca = data["c"],
+              ob = data["o"], hb = data["h"], lb = data["l"], cb = data["c"])
+        self._bundle.on_candle(candle)
+        yield candle
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -189,7 +193,7 @@ class ExecBinance(ExecConnectorWS, Binance):
     @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_message(self, message: Dict):
         # TODO: implement for Binance based on Binance API docs
-        return Balance(...)
+        yield Balance(...)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def create_order(self, aid: str, order: Order):
         # TODO: implement for Binance based on Binance API docs

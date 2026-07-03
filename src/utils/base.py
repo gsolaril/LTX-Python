@@ -22,6 +22,7 @@ class Config(NamedTuple):
     LOG_TO_FILE: bool = True
     LOG_TO_LDB: bool = False
     FOLDER_ROOT: Path = _FOLDER_ROOT
+    TIMEZONE: str = "UTC"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __repr__(self): return str.join("\n => ",
         [f"{K}: {V}" for K, V in self._asdict().items()])
@@ -50,6 +51,8 @@ except Exception as EXC:
     verbose += f"\n => ({EXC.__class__.__name__}) {EXC}"
     verbose += f"\n => Will use default auth, including Vault password."
     STARTUP_ERRORS.append(verbose)
+
+TZ = Config.TIMEZONE
 
 _proc = Popen(["docker", "ps", "--format", "{{json .}}"],
         stdout = subprocess.PIPE, stderr = subprocess.PIPE,
