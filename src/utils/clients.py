@@ -212,7 +212,7 @@ class RedisManager:
         next_at = Timestamp.now(TZ).ceil(freq)
         self._reporter.close_batch()
         report = self._reporter.to_string(next_at)
-        if report: Log.info(report)
+        if report: Log.info("Redis' " + report)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_stream(self, func: Callable = None):
         def decorator(func: Callable):

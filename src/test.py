@@ -1,14 +1,7 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import os, sys, asyncio, time
 from argparse import ArgumentParser
 from unittest import TestCase, TestLoader, TextTestRunner, TextTestResult
-from pathlib import Path
-
-_ROOT = Path(__file__).resolve().parents[1]
-_SRC = _ROOT / "src"
-for _path in (_ROOT, _SRC, _SRC / "models", _SRC / "utils"):
-    if str(_path) not in sys.path:
-        sys.path.insert(0, str(_path))
+from init import *
 
 from src.models import *
 from src.utils import Log
@@ -26,8 +19,8 @@ class CustomTestResult(TextTestResult):
         super().addError(test, err)
         Log.opt(exception = err).error("{} errored", test.id())
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def printErrors(self):
-        pass
+    def printErrors(self): pass
+
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -46,4 +39,3 @@ if (__name__ == "__main__"):
         resultclass = CustomTestResult).run(suite)
     if result.wasSuccessful():
         Log.success("All tests passed")
-    else: sys.exit(1)

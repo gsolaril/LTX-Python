@@ -12,8 +12,8 @@ from src.utils import *
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class Aggregator(StreamingAgent):
+@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class DataCollector(StreamingAgent):
     batch_size: int = field(init = False, kw_only = True, default = 1000)
     freq_scan: int = field(init = False, kw_only = True, default = 60)
     tfs: str = field(init = False, kw_only = True, default = "S1 M1")
@@ -31,7 +31,7 @@ class Aggregator(StreamingAgent):
         self._crons[self.scan] = Timedelta(seconds = self.freq_scan)
         self._crons[self.report] = Timedelta(seconds = self.freq_redis_report)
         self._crons[self.record] = TimeFrame.M1.value
-        self._reporter = Reporter(name = "Aggregator")
+        self._reporter = Reporter(name = "DataCollector")
         self._scan_ready = asyncio.Event()
         self.config_verbose()
  
@@ -126,11 +126,6 @@ class Aggregator(StreamingAgent):
         _, _, venue, symbol, tf = stream.split("|")
         payload["symbol"] = Symbol(venue = venue, symbol = symbol)
         payload["time"] = Timestamp(ms * 1e3 + us, unit = "us", tz = "UTC")
-        #for key in ("pa", "qa", "pb", "qb", "oa", "ha", "la", "ca",
-        #            "ob", "hb", "lb", "cb", "volume", "dus"):
-        #    if (value := payload.get(key, None)) is not None:
-        #        payload[key] = float(value)
-        # Log.debug(f"Processing {tf} -> {payload!r}")
         if tf in self._tfs:
             payload["volume"] = int(payload.pop("volume", 0))
             obj = Candle(**payload, tf = TimeFrame[tf])
