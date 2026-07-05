@@ -162,13 +162,13 @@ class DataCollector(StreamingAgent):
         while True:
             try:
                 response = await Redis.xreadgroup(self,
-                    RedisGroup.MONITOR, self._xstreams)
+                    Redis.Group.MONITOR, self._xstreams)
                 if not response: continue
                 for stream, messages in response:
                     for message_id, payload in messages:
                         if not payload: continue
                         await self.process(stream, message_id, payload)
-                        await Redis.xack(RedisGroup.MONITOR, stream, message_id)
+                        await Redis.xack(Redis.Group.MONITOR, stream, message_id)
             except asyncio.CancelledError: break
             except Exception as EXC: Log.exception(EXC); break
         

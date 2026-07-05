@@ -41,23 +41,6 @@ Log.info(f"Master config:\n => {Config!r}")
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄
-class Postgres:
-    #▄▄▄▄▄▄▄▄▄▄▄
-    @classmethod
-    def create(cls):
-        creds: Credentials = Credentials.get_for("postgres")
-        url = "postgresql://{USERNAME}:{PASSWORD}@{IP}/{DATABASE}"
-        url = url.format(**creds._asdict())
-        #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-        async def test():
-            query = "SELECT 1"
-            client = await asyncpg.create_pool(url)
-            async with client.acquire() as conn:
-                assert await conn.fetchval(query) == 1
-            return client
-        return EventLoop.run_until_complete(test())
-
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class PostgresManager:
     _QUERY = """
@@ -76,10 +59,22 @@ class PostgresManager:
         CONNECTORS = "connectors"
         MONITORING = "monitoring"
         SYMBOLS = "symbol_specs"
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __init__(self, client: asyncpg.Pool):
-        self._to_listen = dict[str, Callable]()
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def _create(cls, creds: Credentials = None):
+        if (creds is None): creds = Credentials.get_for("postgres")
+        url = "postgresql://{USERNAME}:{PASSWORD}@{IP}/{DATABASE}"
+        url = url.format(**creds._asdict())
+        query = "SELECT 1"
+        client = await asyncpg.create_pool(url)
+        async with client.acquire() as conn:
+            assert await conn.fetchval(query) == 1
+        return client        
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, creds: Credentials = None):
+        client = EventLoop.run_until_complete(self._create(creds))
         self._client: asyncpg.Pool = client
+        self._to_listen = dict[str, Callable]()
         self._ready = asyncio.Event()
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def wait(self):
@@ -120,28 +115,6 @@ class PostgresManager:
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
-#▄▄▄▄▄▄▄▄▄▄
-class Redis:
-    @classmethod
-    def create(cls):
-        creds: Credentials = Credentials.get_for("redis")
-        host, port = creds.IP.split(":")
-        #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-        async def test():
-            tstr = Timestamp.now(TZ).strftime("%Y%m%d%H%M%S%f")
-            args = {"decode_responses": True, "host": host, "port": int(port),
-              "username": creds.USERNAME, "password": creds.PASSWORD, "db": 0}
-            client = RedisClient(**args)
-            query_1, query_2 = f"SET test {tstr}", f"GET test"
-            assert (await client.execute_command(query_1) == "OK")
-            assert (await client.execute_command(query_2) == tstr)
-            return client
-        return EventLoop.run_until_complete(test())
-
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class RedisGroup(enum.StrEnum):
-    MONITOR: str = "$"
-    STRATEGY: str = "$"
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class RedisManager:
@@ -157,8 +130,26 @@ class RedisManager:
         0.8: lambda value: Log.warning("Queue is {:.0%} full!".upper().format(value)),
         0.95: lambda value: Log.critical("Queue is {:.0%} full!".upper().format(value)),
     }
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __init__(self, client: RedisClient):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    class Group(enum.StrEnum):
+        MONITOR: str = "$"
+        STRATEGY: str = "$"
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def _create(cls, creds: Credentials = None):
+        if (creds is None): creds = Credentials.get_for("redis")
+        host, port = creds.IP.split(":")
+        tstr = Timestamp.now(TZ).strftime("%Y%m%d%H%M%S%f")
+        args = {"decode_responses": True, "host": host, "port": int(port),
+            "username": creds.USERNAME, "password": creds.PASSWORD, "db": 0}
+        client = RedisClient(**args)
+        query_1, query_2 = f"SET test {tstr}", f"GET test"
+        assert (await client.execute_command(query_1) == "OK")
+        assert (await client.execute_command(query_2) == tstr)
+        return client
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, creds: Credentials = None):
+        client = EventLoop.run_until_complete(self._create(creds))
         self._client: RedisClient = client
         self._reporter = Reporter(name = "RedisManager")
         self._ready = asyncio.Event()
@@ -167,17 +158,17 @@ class RedisManager:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def scan(self, pattern: str = STREAM_PREFIX + "|*"):
         async for K in self._client.scan_iter(pattern): yield K
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def xreadgroup(self, src: Any, group: RedisGroup,
-                        streams: dict[str, str], *args, **kwargs):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def xreadgroup(self, src: Any, group: Group,
+            streams: dict[str, str], *args, **kwargs):
         consumer = src.__class__.__name__
         if src.name: consumer += "|" + src.name
         kwargs.setdefault("count", 100)
         kwargs.setdefault("block", 1000)
         return await self._client.xreadgroup(group.name,
                       consumer, streams, *args, **kwargs)
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def xack(self, group: RedisGroup, stream: str, message_id: str):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def xack(self, group: Group, stream: str, message_id: str):
         return await self._client.xack(stream, group.name, message_id)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def ensure_groups(self, streams: list[str]):
@@ -188,7 +179,7 @@ class RedisManager:
             self._streams.add(stream)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def xcreategroups(self, stream: str, *, mkstream: bool = True):
-        for group, value in RedisGroup.__members__.items():
+        for group, value in self.Group.__members__.items():
             try: await self._client.xgroup_create(
                     stream, group, value, mkstream)
             except ResponseError as EXC:
@@ -251,23 +242,7 @@ class RedisManager:
                     self.VERBOSE_ERROR.format(stream, payload), EXC)
 
 #███████████████████████████████████████████████████████████████████████████████████████████
-#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class ClickHouse:
-    @classmethod
-    def create(cls):
-        creds: Credentials = Credentials.get_for("clickhouse")
-        host, port = creds.IP.split(":")
-        #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-        async def test():
-            query = "SELECT 1"
-            args = {"user": creds.USERNAME, "password": creds.PASSWORD,
-              "host": host, "port": int(port), "database": creds.DATABASE}
-            client = ClickHouseClient(**args)
-            assert client.execute(query) == [(1,)]
-            return client
-        return EventLoop.run_until_complete(test())
-
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class ClickHouseManager:
     VERBOSE_PUSH = "Pushed {0} rows to \"{1}\":\n => {2}"
@@ -276,11 +251,22 @@ class ClickHouseManager:
     class Table(enum.StrEnum):
         TICKS = "history_ticks"
         CANDLES = "history_candles"
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __init__(self, client: ClickHouseClient):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def _create(cls, creds: Credentials = None):
+        if (creds is None): creds = Credentials.get_for("clickhouse")
+        host, port = creds.IP.split(":")
+        query = "SELECT 1"
+        args = {"user": creds.USERNAME, "password": creds.PASSWORD,
+          "host": host, "port": int(port), "database": creds.DATABASE}
+        client = ClickHouseClient(**args)
+        assert client.execute(query) == [(1,)]
+        return client
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, creds: Credentials = None):
+        client = EventLoop.run_until_complete(self._create(creds))
         self._client: ClickHouseClient = client
         self._ready = set[str]()
-
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def parse(self, row: dict, columns: list[str]):
         values = list()
@@ -290,7 +276,6 @@ class ClickHouseManager:
                 value = value.to_pydatetime()
             values.append(value)
         return tuple(values)
-
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def write(self, table: str, rows: Iterable[dict]):
         columns, data = None, list()
@@ -303,7 +288,6 @@ class ClickHouseManager:
             self._client.execute(query, data, types_check = True)
         else: Log.warning(f"No rows written to \"{table}\"")
         return columns, data
-
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def flush(self, table: str, func: Callable, instance, *args, **kwargs):
         columns, data = None, list()
@@ -316,21 +300,18 @@ class ClickHouseManager:
             await asyncio.to_thread(self._client.execute, query, data, True)
         else: Log.warning(f"No rows written to \"{table}\"")
         return columns, data
-
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def to_table(self, func: Callable[Iterable[dict]] = None, *, table: Table):
         def decorator(func: Callable[Iterable[dict]]):
             return self.Writer(self, table.value, func)
         if func is None: return decorator
         return decorator(func)
-
     #▄▄▄▄▄▄▄▄▄▄▄
     class Writer:
         #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def __init__(self, manager: "ClickHouseManager", table: str, func: Callable):
             self._manager, self._table, self._func = manager, table, func
             functools.update_wrapper(self, func)
-
         #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def __call__(self, instance, *args, **kwargs):
             try: return self._manager.write(self._table,
@@ -338,7 +319,6 @@ class ClickHouseManager:
             except Exception as EXC:
                 Log.exception(EXC)
                 return None, list()
-
         #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def __get__(self, instance, owner = None):
             if (instance is None): return self
@@ -356,9 +336,9 @@ class ClickHouseManager:
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀       
 try:
-    Redis: RedisManager = RedisManager(Redis.create())
-    ClickHouse: ClickHouseManager = ClickHouseManager(ClickHouse.create())
-    Postgres: PostgresManager = PostgresManager(Postgres.create())
+    Redis: RedisManager = RedisManager()
+    Postgres: PostgresManager = PostgresManager()
+    ClickHouse: ClickHouseManager = ClickHouseManager()
 except Exception as EXC: Log.exception(EXC); sys.exit(1)
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
