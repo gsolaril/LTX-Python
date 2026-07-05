@@ -1,7 +1,6 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 from argparse import ArgumentParser
 from unittest import TestCase, TestLoader, TextTestRunner, TextTestResult
-from init import *
 
 from src.models import *
 from src.utils import Log
@@ -23,8 +22,7 @@ class CustomTestResult(TextTestResult):
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-if (__name__ == "__main__"):
+def main():
     parser = ArgumentParser()
     parser.add_argument("agent", nargs = "?", type = str)
     name: str = getattr(parser.parse_args(), "agent", None)
@@ -39,3 +37,6 @@ if (__name__ == "__main__"):
         resultclass = CustomTestResult).run(suite)
     if result.wasSuccessful():
         Log.success("All tests passed")
+
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+if (__name__ == "__main__"): main()

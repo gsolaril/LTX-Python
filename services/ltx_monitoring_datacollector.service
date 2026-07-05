@@ -8,7 +8,7 @@ Type=simple
 User=gaston
 Group=gaston
 WorkingDirectory=~
-ExecStart=/srv/shared/.venv/bin/python LTX-Python/src/main.py monitoring/datacollector
+ExecStart=/srv/shared/.venv/bin/ltx monitoring/datacollector
 Restart=on-failure
 RestartSec=5
 

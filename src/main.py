@@ -1,6 +1,5 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 from argparse import ArgumentParser
-from init import *
 
 from src.connectors import connectors_agents
 from src.monitoring import monitoring_agents
@@ -9,8 +8,7 @@ from src.utils import Log, EventLoop
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-if (__name__ == "__main__"):
+def main():
     parser = ArgumentParser()
     parser.add_argument("agent", nargs = "?", type = str)
     name: str = getattr(parser.parse_args(), "agent", None)
@@ -24,3 +22,6 @@ if (__name__ == "__main__"):
     try: EventLoop.run_until_complete(agent().start())
     except Exception as EXC: Log.exception(EXC)
     finally: Log.success(f"Exiting \"{name}\"...")
+
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+if (__name__ == "__main__"): main()

@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ltx-python"
+version = "0.1.0"
+description = "LTX crypto data connectors and monitoring stack"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp",
+    "asyncpg",
+    "bidict",
+    "clickhouse-driver",
+    "hvac",
+    "loguru",
+    "loki-logger-handler",
+    "numpy",
+    "pandas",
+    "polymarket-client==0.1.0b2",
+    "py-clob-client",
+    "redis",
+    "sortedcontainers",
+    "tqdm",
+]
+
+[project.scripts]
+ltx = "src.main:main"
+ltx-test = "src.test:main"
+
+[project.optional-dependencies]
+dev = []
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]

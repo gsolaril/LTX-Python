@@ -2,14 +2,14 @@
 import sys, asyncio, json, asyncpg, functools, enum
 from pandas import DataFrame, Timestamp, Timedelta
 from typing import Any, Callable, ClassVar, Iterable
-from logger import Log, LokiClient
+from .logger import Log, LokiClient
 from collections import deque
 from redis.exceptions import ResponseError
 from redis.asyncio import Redis as RedisClient
 from clickhouse_driver import Client as ClickHouseClient
-from base import DOCKER, DEFAULT_HOST, STARTUP_ERRORS, TZ
-from base import Config, Credentials
-from misc import Queue, Reporter
+from .base import DOCKER, DEFAULT_HOST, STARTUP_ERRORS, TZ
+from .base import Config, Credentials
+from .misc import Queue, Reporter
 
 EventLoop: asyncio.AbstractEventLoop
 EventLoop = asyncio.new_event_loop()
@@ -272,9 +272,6 @@ class ClickHouse:
 class ClickHouseManager:
     VERBOSE_PUSH = "Pushed {0} rows to \"{1}\":\n => {2}"
     VERBOSE_ERROR = "Failed to write to \"{0}\":"
-    INT_COLUMNS = {"volume", "dus"}
-    FLOAT_COLUMNS = {"pa", "qa", "pb", "qb",
-        "oa", "ha", "la", "ca", "ob", "hb", "lb", "cb"}
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class Table(enum.StrEnum):
         TICKS = "history_ticks"
@@ -307,7 +304,8 @@ class ClickHouseManager:
         else: Log.warning(f"No rows written to \"{table}\"")
         return columns, data
 
-    async def _flush(self, table: str, func: Callable, instance, *args, **kwargs):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def flush(self, table: str, func: Callable, instance, *args, **kwargs):
         columns, data = None, list()
         for row in func(instance, *args, **kwargs):
             if columns is None: columns = list(row.keys())
@@ -322,27 +320,36 @@ class ClickHouseManager:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def to_table(self, func: Callable[Iterable[dict]] = None, *, table: Table):
         def decorator(func: Callable[Iterable[dict]]):
-            return self._ToTable(self, table.value, func)
+            return self.Writer(self, table.value, func)
         if func is None: return decorator
         return decorator(func)
 
-    class _ToTable:
+    #▄▄▄▄▄▄▄▄▄▄▄
+    class Writer:
+        #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def __init__(self, manager: "ClickHouseManager", table: str, func: Callable):
             self._manager, self._table, self._func = manager, table, func
             functools.update_wrapper(self, func)
 
+        #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def __call__(self, instance, *args, **kwargs):
-            try: return self._manager.write(self._table, self._func(instance, *args, **kwargs))
-            except Exception as EXC: Log.exception(EXC); return None, list()
+            try: return self._manager.write(self._table,
+                  self._func(instance, *args, **kwargs))
+            except Exception as EXC:
+                Log.exception(EXC)
+                return None, list()
 
+        #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def __get__(self, instance, owner = None):
-            if instance is None: return self
+            if (instance is None): return self
             bound = functools.partial(self.__call__, instance)
             functools.update_wrapper(bound, self._func)
             async def flush(*args, **kwargs):
-                try: return await self._manager._flush(
+                try: return await self._manager.flush(
                     self._table, self._func, instance, *args, **kwargs)
-                except Exception as EXC: Log.exception(EXC); return None, list()
+                except Exception as EXC:
+                    Log.exception(EXC)
+                    return None, list()
             bound.flush = flush
             return bound
 

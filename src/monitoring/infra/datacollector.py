@@ -1,6 +1,5 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 import asyncio
-from tkinter.constants import NONE
 from typing import ClassVar
 from collections import deque
 from pandas import DataFrame, concat
@@ -15,13 +14,16 @@ from src.utils import *
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataCollector(StreamingAgent):
-    batch_size: int = field(init = False, kw_only = True, default = 1000)
+    maxlen: int = field(init = False, kw_only = True, default = 500000)
+    batch_size: int = field(init = False, kw_only = True, default = 100000)
+    freq_write_batch: int = field(init = False, kw_only = True, default = 5)
+    freq_write_report: int = field(init = False, kw_only = True, default = 60)
     freq_scan: int = field(init = False, kw_only = True, default = 60)
     tfs: str = field(init = False, kw_only = True, default = "S1 M1")
-    STREAM_PREFIX: ClassVar[str] = "DATA"
-    TS_TICKS: ClassVar[ClickHouse.Table] = ClickHouse.Table.TICKS
-    TS_CANDLES: ClassVar[ClickHouse.Table] = ClickHouse.Table.CANDLES
     TABLE_CONFIG: ClassVar[Postgres.Table] = Postgres.Table.MONITORING
+    TS_CANDLES: ClassVar[ClickHouse.Table] = ClickHouse.Table.CANDLES
+    TS_TICKS: ClassVar[ClickHouse.Table] = ClickHouse.Table.TICKS
+    STREAM_PREFIX: ClassVar[str] = "DATA"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
@@ -30,11 +32,12 @@ class DataCollector(StreamingAgent):
             Tick: asyncio.Queue(maxsize = self.maxlen),
             Candle: asyncio.Queue(maxsize = self.maxlen)}
         self._crons[self.scan] = Timedelta(seconds = self.freq_scan)
-        self._crons[self.report] = Timedelta(seconds = self.freq_redis_report)
-        self._crons[self.record] = TimeFrame.M1.value
+        self._crons[self.write_batch] = Timedelta(seconds = self.freq_write_batch)
+        self._crons[self.write_report] = Timedelta(seconds = self.freq_write_report)
+        self._crons[self.redis_report] = Timedelta(seconds = self.freq_redis_report)
         self._reporter = Reporter(name = "DataCollector")
         self._scan_ready = asyncio.Event()
-        self._recorded = None
+        self._recorded: DataFrame = None
         self.config_verbose()
  
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -47,7 +50,7 @@ class DataCollector(StreamingAgent):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def write(self, queue: asyncio.Queue):
         copy = deque(maxlen = self.batch_size)
-        while len(copy) < copy.maxlen:
+        while (len(copy) < self.batch_size):
             if queue.empty(): break
             copy.append(queue.get_nowait())
         while copy:
@@ -67,50 +70,48 @@ class DataCollector(StreamingAgent):
     def write_candles(self): yield from self.write(self._queues[Candle])
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def record(self):
-        Log.info("Recording...")
-        agg = {"first": "since", "last": "until", "count": "count"}
+    async def write_batch(self):
+        agg = {"since": "min", "until": "max", "count": "count"}
 
-        dft = DataFrame(columns = Tick.INDEX_KEYS)
+        df = DataFrame(columns = Tick.INDEX_KEYS)
         columns, data = await self.write_ticks.flush()
-        if data: dft = DataFrame(data, columns = columns)
-        dft = dft[Tick.INDEX_KEYS]
-        dft["tf"] = "T1"
+        if data: df = DataFrame(data, columns = columns)
+        df = df[Tick.INDEX_KEYS]
+        df["tf"] = "T1"
 
         dfc = DataFrame(columns = Candle.INDEX_KEYS)
         columns, data = await self.write_candles.flush()
         if data: dfc = DataFrame(data, columns = columns)
         dfc = dfc[Candle.INDEX_KEYS]
 
-        df = concat((dft, dfc)).sort_index()
-        df = df.set_index(Candle.INDEX_KEYS[: -1])["time"]
+        df = concat((df, dfc)).set_index(Candle.INDEX_KEYS[: -1])["time"]
         if df.empty: return Log.warning("No rows written to ClickHouse")
-        df = df.groupby(df.index.names).agg([*agg.keys()])
-        df = df.rename(columns = agg, errors = "ignore")
+        df = df.groupby(df.index.names).agg([*agg.values()])
+        df.columns = agg.keys()
+        agg["count"] = "sum"
 
-        if self._recorded is not None:
-            new = df.loc[df.index.difference(self._recorded.index)]
-            self._recorded = concat((self._recorded, new), axis = "index")
-            self._recorded["count"] = self._recorded["count"].fillna(0)
-            self._recorded["count"] = self._recorded["count"] + df["count"]
-            self._recorded["since"] = self._recorded["since"].fillna(df["since"])
-            self._recorded["until"] = df["until"]
+        if (self._recorded is not None):
+            keys = Candle.INDEX_KEYS[: -1]
+            df: DataFrame = concat((self._recorded, df))
+            self._recorded = df.groupby(keys).agg(agg)
         else: self._recorded = df
 
-        df = df.reset_index("tf")
-        sub_minute = df["tf"].str[0].isin({*"ST"})
-        df["since"] = df["since"].dt.strftime("%m/%d %H:%M:%S")
-        df["until"] = df["until"].dt.strftime("%m/%d %H:%M:%S")
-        df.loc[~ is_sub_minute, "until"] = df["until"].str[: -2]
-        df = df.set_index("tf", append = True).sort_index()
-        df["since"] = df["since"].str[: -2]
-
-        df = self._recorded.unstack("tf")
-        df = df.swaplevel(axis = "columns")
-        df = df.sort_index(axis = "columns")
-        verbose = "Wrote to ClickHouse...\n"
-        verbose += df.to_string(max_rows = 20)
-        Log.success(verbose)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def write_report(self):
+        if (self._recorded is None): return
+        df = self._recorded.reset_index("tf")
+        # "YYYY-MM-DD HH:MM:SS" => "MM/DD HH:MM:SS"
+        df["since"] = df["since"].astype(str).str[5 : 19]
+        df["until"] = df["until"].astype(str).str[5 : 19]
+        is_small_tf = df["tf"].str.startswith("T")
+        is_small_tf |= df["tf"].str.startswith("S")
+        large_tf: DataFrame = df.loc[~ is_small_tf]
+        # (tf >= M1) => "MM/DD HH:MM:SS" => "MM/DD HH:MM"
+        df.loc[large_tf.index, "since"] = large_tf["since"].str[: -3]
+        df.loc[large_tf.index, "until"] = large_tf["until"].str[: -3]
+        df = df.set_index("tf", append = True).sort_index().unstack("tf")
+        df = df.swaplevel(axis = "columns").sort_index(axis = "columns")
+        Log.success("Wrote to ClickHouse...\n" + df.to_string(max_rows = 20))
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def scan(self):
@@ -132,9 +133,9 @@ class DataCollector(StreamingAgent):
         new_str = str.join(", ", sorted(new))
         Log.info(f"New streams:\n => {new_str}")
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def report(self):
-        freq = self._crons[self.report]
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def redis_report(self):
+        freq = self._crons[self.redis_report]
         next_at = Timestamp.now(TZ).ceil(freq)
         report = self._reporter.to_string(next_at)
         self._reporter.close_batch()

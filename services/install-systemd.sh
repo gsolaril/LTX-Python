@@ -3,6 +3,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SYSTEMD="/etc/systemd/system"
+VENV="/srv/shared/.venv"
+
+"${VENV}/bin/pip" install -e "${ROOT}"
 
 rm -f "${SYSTEMD}"/ltx_*.service
 cp "${ROOT}"/services/*.service "${SYSTEMD}/"
