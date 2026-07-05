@@ -2,42 +2,16 @@
 import sys, asyncio, json, asyncpg, functools, enum
 from pandas import DataFrame, Timestamp, Timedelta
 from typing import Any, Callable, ClassVar, Iterable
-from .logger import Log, LokiClient
 from collections import deque
 from redis.exceptions import ResponseError
 from redis.asyncio import Redis as RedisClient
 from clickhouse_driver import Client as ClickHouseClient
-from .base import DOCKER, DEFAULT_HOST, STARTUP_ERRORS, TZ
-from .base import Config, Credentials
+from .base import Credentials, Log, TZ
 from .misc import Queue, Reporter
 
 EventLoop: asyncio.AbstractEventLoop
 EventLoop = asyncio.new_event_loop()
 asyncio.set_event_loop(EventLoop)
-
-#███████████████████████████████████████████████████████████████████████████████████████████
-#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-Log.remove(0)
-
-args = {"backtrace": False, "colorize": True, "serialize": False, "level": "DEBUG"}
-Log.add(**args, sink = sys.stdout, format = LokiClient.LOG_FORMAT["stdout"])
-Log.info(f"Logging to stdout...")
-
-if Config.LOG_TO_FILE:
-    sink = str(Config.FOLDER_ROOT) + "/logs/" + LokiClient.LOGFILE_FORMAT
-    Log.add(**args, sink = sink, format = LokiClient.LOG_FORMAT["file"])
-    Log.info(f"Logging to file @ \"{Config.FOLDER_ROOT / "logs"}\"")
-
-if Config.LOG_TO_LDB and ("grafana" in DOCKER):
-    _creds = Credentials.get_for("loki")
-    _creds.IP = f"{DEFAULT_HOST}:{DOCKER["grafana"]["ports"][-1]}"
-    sink = LokiClient(url = LokiClient.URL_FORMAT.format(IP = _creds.IP),
-            timeout = 10, labels = {"application": Config.SESSION_NAME})
-    Log.add(**args, sink = sink, format = LokiClient.LOG_FORMAT["gui"])
-    Log.info(f"Logging to Loki @ \"{_creds.IP}\"")
-
-for error in STARTUP_ERRORS: Log.error(error)
-Log.info(f"Master config:\n => {Config!r}")
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -115,7 +89,6 @@ class PostgresManager:
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
-
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class RedisManager:
     PRINT_LIMIT = 50
