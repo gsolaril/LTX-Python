@@ -38,19 +38,20 @@ class StreamWS(Stream):
                 self._subs_known.clear()
                 self._subs.clear()
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def stream(self, connector: Connector):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def stream(self, src: Connector):
 
+        stream_name = f"{src.name}/{self.name}"
         async with ClientSession() as session:
-            while connector.active:
+            while src.active:
                 try:
                     args = await self.url_args()
-                    Log.info(self.VERBOSE_RECONN.format(self.name, args["url"]))
+                    Log.info(self.VERBOSE_RECONN.format(stream_name, args["url"]))
                     async with session.ws_connect(**args, heartbeat = 30) as WS:
                         self._WS = WS ; self._WS_connected.set()
-                        connector._sockets[self.name] = self._WS
+                        src._sockets[stream_name] = self._WS
                         await self._subs_known.wait()
-                        Log.info(self.VERBOSE_CONNED.format(self.name))
+                        Log.info(self.VERBOSE_CONNED.format(stream_name))
                         async for message in self._WS:
                             if (message.type == WSMsgType.TEXT):
                                 try:
@@ -60,20 +61,20 @@ class StreamWS(Stream):
                                     text = str(message.data)
                                     if (text.lower() == "pong"): pass
                                     elif (text.lower() == "ping"): await self.send_ping(False)
-                                    else: Log.warning(self.VERBOSE_NOJSON.format(self.name, text))
+                                    else: Log.warning(self.VERBOSE_NOJSON.format(stream_name, text))
                             elif (message.type == WSMsgType.PING): await self._WS.pong(message.data)
                             elif (message.type == WSMsgType.ERROR): raise self._WS.exception()
                             elif (message.type in {WSMsgType.CLOSED, WSMsgType.CLOSING}):
-                                Log.warning(self.VERBOSE_CLOSED.format(self.name))
+                                Log.warning(self.VERBOSE_CLOSED.format(stream_name))
                             else:
-                                Log.warning(self.VERBOSE_WDTYPE.format(self.name, message.type))
+                                Log.warning(self.VERBOSE_WDTYPE.format(stream_name, message.type))
 
                 except Exception as EXC:
-                    Log.exception(self.VERBOSE_ERROR.format(self.name), EXC)
+                    Log.exception(self.VERBOSE_ERROR.format(stream_name), EXC)
                     self._subs.clear(); self._WS = None
                     self._WS_connected.clear()
                     self._subs_known.clear()
-                    if connector.active:
+                    if src.active:
                         await asyncio.sleep(2)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
@@ -85,6 +86,8 @@ class DataConnectorWS(DataConnector):
         super().__init__()
         stream: DataStreamWS
         for stream in streams.values():
+            self._subs_new[stream.name] = set[set]()
+            self._subs_old[stream.name] = set[set]()
             self._streams[f"{stream.name}/stream"] = stream.stream
             self._streams[f"{stream.name}/update"] = stream.update
 
@@ -92,26 +95,27 @@ class DataConnectorWS(DataConnector):
 class DataStreamWS(StreamWS):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, name: str, on_message: Callable, url_args: Callable, 
-                      on_ping: Callable = None, get_subs: Callable = None):
+                       on_ping: Callable = None, get_subs: Callable = None):
 
         super().__init__(name, on_message, url_args, on_ping)
         self.get_subs: Callable = get_subs
     
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update(self, connector: DataConnector):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update(self, src: DataConnector):
         
-        Log.warning(f"WS for \"{self.name}\" channel loop started.")
-        while connector.active:
+        stream_name = f"{src.name}/{self.name}"
+        Log.warning(f"WS for \"{stream_name}\" channel loop started.")
+        while src.active:
             await asyncio.sleep(1)
             await self._WS_connected.wait()
             if self._subs: await self.send_ping(True)
 
             subs_new = set()
-            if (symbols := connector._symbols_new):
-                subs_new, payload_new = self.get_subs(symbols, True)
+            if (subs := src._subs_new[self.name]):
+                subs_new, payload_new = self.get_subs(subs, True)
             subs_old = set()
-            if (symbols := connector._symbols_old):
-                subs_old, payload_old = self.get_subs(symbols, False)
+            if (subs := src._subs_old[self.name]):
+                subs_old, payload_old = self.get_subs(subs, False)
 
             if (self._WS is None) or self._WS.closed:
                 self._subs.clear(); continue
@@ -123,15 +127,15 @@ class DataStreamWS(StreamWS):
                     for payload in payload_new:
                         await self._WS.send_json(payload)
                     self._subs = self._subs | subs_new
-                    connector._symbols_new.clear()
+                    src._subs_new[self.name].clear()
                     self._subs_known.set()
                 if subs_old:
                     for payload in payload_old:
                         await self._WS.send_json(payload)
                     self._subs = self._subs - subs_old
-                    connector._symbols_old.clear()
+                    src._subs_old[self.name].clear()
             except Exception as EXC:
-                Log.exception(self.VERBOSE_NOCONN.format(self.name, "sub"), EXC)
+                Log.exception(self.VERBOSE_NOCONN.format(stream_name, "sub"), EXC)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

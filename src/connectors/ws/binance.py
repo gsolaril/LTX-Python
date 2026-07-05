@@ -30,7 +30,7 @@ class Binance(Venue):
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def sign_payload(cls, payload: Dict[str, Any]):
         payload = payload.copy()
-        ms = Timestamp.utcnow().timestamp() * 1e3
+        ms = Timestamp.now(TZ).timestamp() * 1e3
         payload.setdefault("timestamp", int(ms))
         payload.setdefault("recvWindow", 5000)
         payload["signature"] = cls.signature(payload)
@@ -82,24 +82,29 @@ class Binance(Venue):
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataBinance(DataConnectorWS, Binance):
 
+    URL_WS: ClassVar[str] = ...
     STREAM_PATH_TICK: ClassVar[str] = ...
     STREAM_PATH_KLINE: ClassVar[str] = ...
     CHANNEL_KEY_TICK: ClassVar[str] = ...
     CHANNEL_KEY_KLINE: ClassVar[str] = ...
     SYMBOL_KEY_KLINE: ClassVar[str] = "ps"
-    KLINE_EVENT: ClassVar[str] = ...
+    EVENT_KLINE: ClassVar[str] = ...
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self): super().__init__(
-        ticks = DataStreamWS(name = self.__class__.__name__ + "/ticks",
+        ticks = DataStreamWS(name = "ticks",
             get_subs = self.get_subs_ticks, on_message = self.on_ticks,
             on_ping = self.on_ping, url_args = self.get_url_headers_ticks),
-        klines = DataStreamWS(name = self.__class__.__name__ + "/klines",
+        klines = DataStreamWS(name = "klines",
             get_subs = self.get_subs_klines, on_message = self.on_klines,
             on_ping = self.on_ping, url_args = self.get_url_headers_klines))
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def get_urlh(self, path: str): return {"url": self.url + "/" + path} 
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def get_urlh(self, path: str):
+        base = self.url or type(self).URL_WS
+        if not base: raise ValueError(
+            f"{self.name}: websocket url not configured")
+        return {"url": base.rstrip("/") + "/" + path.lstrip("/")} 
     async def get_url_headers_ticks(self): return await self.get_urlh(self.STREAM_PATH_TICK)
     async def get_url_headers_klines(self): return await self.get_urlh(self.STREAM_PATH_KLINE)
 
@@ -129,18 +134,20 @@ class DataBinance(DataConnectorWS, Binance):
         if symbol is None: return
 
         tse = data.get("E", None)
-        if (tse is not None): ts = Timestamp.utcfromtimestamp(int(tse) / 1e3)
-        ts = Timestamp.utcnow()
+        if (tse is not None): ts = Timestamp.fromtimestamp(int(tse) / 1e3, TZ)
+        ts = Timestamp.now(TZ)
         symbol = self._specs.get(self.symbol_to_local(symbol), None)
-        if symbol is None: return None
-        return Tick(symbol = symbol, time = ts, pa = data["a"],
-                qa = data["A"], pb = data["b"], qb = data["B"])
+        if symbol is None: return
+        tick = Tick(symbol = symbol, time = ts, pa = data["a"],
+               qa = data["A"], pb = data["b"], qb = data["B"])
+        self._bundle.on_tick(tick)
+        yield tick
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_klines(self, data: Dict):
         if (data := data.get("data", None)) is None: return
         if (event := data.get("e", None)) is None: return
-        if (event != self.KLINE_EVENT): return
+        if (event != self.EVENT_KLINE): return
         symbol = data.get(self.SYMBOL_KEY_KLINE, None)
         if symbol is None: return
 
@@ -150,14 +157,16 @@ class DataBinance(DataConnectorWS, Binance):
         tf_str = data.get("i", None)
         closed = data.get("x", False)
         if not tse or not tf_str or not closed: return
-        ts = Timestamp.utcfromtimestamp(int(tse) / 1000) + self._offset
-        ts = Timestamp.utcnow()
+        ts = Timestamp.fromtimestamp(int(tse) / 1000, TZ) + self._offset
+        ts = Timestamp.now(TZ)
         symbol = self._specs.get(self.symbol_to_local(symbol), None)
-        if symbol is None: return None
-        return Candle(symbol = symbol, 
-            time = ts, tf = TimeFrame.swap_tn(tf_str), volume = data["n"],
-            oa = data["o"], ha = data["h"], la = data["l"], ca = data["c"],
-            ob = data["o"], hb = data["h"], lb = data["l"], cb = data["c"])
+        if symbol is None: return
+        candle = Candle(symbol = symbol, 
+              time = ts, tf = TimeFrame.swap_tn(tf_str), volume = data["n"],
+              oa = data["o"], ha = data["h"], la = data["l"], ca = data["c"],
+              ob = data["o"], hb = data["h"], lb = data["l"], cb = data["c"])
+        self._bundle.on_candle(candle)
+        yield candle
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -184,7 +193,7 @@ class ExecBinance(ExecConnectorWS, Binance):
     @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_message(self, message: Dict):
         # TODO: implement for Binance based on Binance API docs
-        return Balance(...)
+        yield Balance(...)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def create_order(self, aid: str, order: Order):
         # TODO: implement for Binance based on Binance API docs
@@ -211,6 +220,7 @@ class BinanceCoin(Binance):
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataBinanceCoin(DataBinance, BinanceCoin):
+    URL_WS: ClassVar[str] = "wss://dstream.binance.com"
     STREAM_PATH_TICK: ClassVar[str] = "public/stream"
     STREAM_PATH_KLINE: ClassVar[str] = "market/stream"
     CHANNEL_KEY_TICK: ClassVar[str] = "@bookTicker"
@@ -231,6 +241,7 @@ class BinanceSpot(Binance):
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataBinanceSpot(DataBinance, BinanceSpot):
+    URL_WS: ClassVar[str] = "wss://stream.binance.com:9443"
     STREAM_PATH_TICK: ClassVar[str] = "stream"
     STREAM_PATH_KLINE: ClassVar[str] = "stream"
     CHANNEL_KEY_TICK: ClassVar[str] = "@bookTicker"
@@ -251,6 +262,7 @@ class BinanceUsdm(Binance):
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataBinanceUsdm(DataBinance, BinanceUsdm):
+    URL_WS: ClassVar[str] = "wss://fstream.binance.com"
     STREAM_PATH_TICK: ClassVar[str] = "public/stream"
     STREAM_PATH_KLINE: ClassVar[str] = "market/stream"
     CHANNEL_KEY_TICK: ClassVar[str] = "@bookTicker"

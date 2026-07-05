@@ -5,7 +5,8 @@ from numpy import sign
 from dataclasses import asdict, dataclass
 from pandas import Timestamp, Timedelta
 from enum import IntEnum, StrEnum
-from misc import Symbol
+from .misc import Symbol
+from src.utils import TZ
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -33,7 +34,7 @@ class Order:
         self.side = self.Side.BUY if (self.size >= 0) else self.Side.SELL
         self.type = self.Type.MARKET if not self.price else self.Type.LIMIT
         
-        self.time = Timestamp.now("UTC")
+        self.time = Timestamp.now(TZ)
         ts = int(self.time.timestamp() * 1e6)
         self.UID = numpy.base_repr(ts, base = 36).upper()
         self.check_expired(self.time)
@@ -110,7 +111,7 @@ class Response(Order):
         self.size = float(kwargs.get("size", order.size))
         self.price = float(kwargs.get("price", order.price))
         if self.time_place is None:
-            self.time_place = Timestamp.now("UTC")
+            self.time_place = Timestamp.now(TZ)
         
         self.check_expired(self.time_order)
         self.check_expired(self.time_place)

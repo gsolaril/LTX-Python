@@ -1,11 +1,12 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 import os, sys, json, subprocess
-from getpass import getpass
-from pathlib import Path
+from getpass import getpass, getuser
 from configparser import ConfigParser
 from hvac import Client as VaultClient
+from pathlib import Path
 from subprocess import Popen
 from typing import NamedTuple
+from .logger import Log, LokiClient
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -17,12 +18,12 @@ STARTUP_ERRORS = list()
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class Config(NamedTuple):
-    USER: str = os.getlogin()
+    USER: str = getuser()
     SESSION_NAME: str = __name__
     LOG_TO_FILE: bool = True
     LOG_TO_LDB: bool = False
-    DEBUG_MODE: bool = False
     FOLDER_ROOT: Path = _FOLDER_ROOT
+    TIMEZONE: str = "UTC"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __repr__(self): return str.join("\n => ",
         [f"{K}: {V}" for K, V in self._asdict().items()])
@@ -51,6 +52,8 @@ except Exception as EXC:
     verbose += f"\n => ({EXC.__class__.__name__}) {EXC}"
     verbose += f"\n => Will use default auth, including Vault password."
     STARTUP_ERRORS.append(verbose)
+
+TZ = Config.TIMEZONE
 
 _proc = Popen(["docker", "ps", "--format", "{{json .}}"],
         stdout = subprocess.PIPE, stderr = subprocess.PIPE,
@@ -138,3 +141,27 @@ class Credentials(NamedTuple):
         defaults["ip"] = f"{DEFAULT_HOST}:{DOCKER[name.lower()]['ports'][0]}"
         defaults["password"] = kv["data"]["data"][name.lower()]
         return Credentials._from_kv(src = name, defs = defaults, data = auth_dict)
+
+#███████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+Log.remove(0)
+
+args = {"backtrace": False, "colorize": True, "serialize": False, "level": "DEBUG"}
+Log.add(**args, sink = sys.stdout, format = LokiClient.LOG_FORMAT["stdout"])
+Log.info(f"Logging to stdout...")
+
+if Config.LOG_TO_FILE:
+    sink = str(Config.FOLDER_ROOT) + "/logs/" + LokiClient.LOGFILE_FORMAT
+    Log.add(**args, sink = sink, format = LokiClient.LOG_FORMAT["file"])
+    Log.info(f"Logging to file @ \"{Config.FOLDER_ROOT / "logs"}\"")
+
+if Config.LOG_TO_LDB and ("grafana" in DOCKER):
+    _creds = Credentials.get_for("loki")
+    _creds.IP = f"{DEFAULT_HOST}:{DOCKER["grafana"]["ports"][-1]}"
+    sink = LokiClient(url = LokiClient.URL_FORMAT.format(IP = _creds.IP),
+            timeout = 10, labels = {"application": Config.SESSION_NAME})
+    Log.add(**args, sink = sink, format = LokiClient.LOG_FORMAT["gui"])
+    Log.info(f"Logging to Loki @ \"{_creds.IP}\"")
+
+for error in STARTUP_ERRORS: Log.error(error)
+Log.info(f"Master config:\n => {Config!r}")

@@ -1,8 +1,11 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+import asyncio
 from pandas import Timestamp
+from sortedcontainers import SortedDict
 from dataclasses import dataclass, field, asdict
-from typing import ClassVar
-from misc import Account, Symbol, TimeFrame
+from typing import Any, ClassVar, Callable
+from .misc import Account, Symbol, TimeFrame
+from src.utils import TZ
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -10,15 +13,17 @@ from misc import Account, Symbol, TimeFrame
 @dataclass#█▄▄▄
 class BasePoint:
     time: Timestamp = field(kw_only = True, default = None)
+    dus: int = field(kw_only = True, default = None)
     STREAM_KEY: ClassVar[str] = ...
     INDEX_KEYS: ClassVar[list[str]] = ...
     CACHE_KEYS: ClassVar[list[str]] = ...
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
-        now = Timestamp.now("UTC")
+        now = Timestamp.now(TZ)
         if self.time is None: self.time = now
         delay_s = (now - self.time).total_seconds()
-        self.dus = int(delay_s * 1e6)
+        if (self.dus is not None): self.dus = int(self.dus)
+        else: self.dus = int(delay_s * 1e6)
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def time_us(self): return int(self.time.timestamp() * 1e6)
@@ -38,7 +43,6 @@ class DataPoint(BasePoint):
         index, data = payload.pop("index"), payload.pop("data")
         return {"stream": self.STREAM_KEY + "|" + index,
                 "time": self.time_us, "payload": data}
-
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄
 class Quote(BasePoint):
@@ -154,6 +158,8 @@ class Candle(Quote):
         else: interval = f"{self.time:%Y/%m/%d %H:%M:%S.%f}-{self._time_close:%Y/%m/%d %H:%M:%S.%f}"
         return f"Candle({self.symbol!r} @ {interval} ({self.tf.name}) | " \
             f"O:{self.oa}, H:{self.ha}, L:{self.la}, C:{self.ca} | V:{self.volume})"
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __bool__(self): return (self.volume > 0) and (self.oa > 0) and (self.ob > 0)
         
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
@@ -161,14 +167,14 @@ class Candle(Quote):
         self._time_ltick = self.time
         self.time = self.time.floor(self.tf.value)
         self._time_close = self.time + self.tf.value
-        if (self.oa is None): self.oa = float(self.oa)
-        if (self.ob is None): self.ob = float(self.ob)
-        if (self.ha is None): self.ha = float(self.ha)
-        if (self.la is None): self.la = float(self.la)
-        if (self.ca is None): self.ca = float(self.ca)
-        if (self.hb is None): self.hb = float(self.hb)
-        if (self.lb is None): self.lb = float(self.lb)
-        if (self.cb is None): self.cb = float(self.cb)
+        if (self.oa is not None): self.oa = float(self.oa)
+        if (self.ob is not None): self.ob = float(self.ob)
+        if (self.ha is not None): self.ha = float(self.ha)
+        if (self.la is not None): self.la = float(self.la)
+        if (self.ca is not None): self.ca = float(self.ca)
+        if (self.hb is not None): self.hb = float(self.hb)
+        if (self.lb is not None): self.lb = float(self.lb)
+        if (self.cb is not None): self.cb = float(self.cb)
         if not self.volume: self.volume = 0
         self.volume = int(self.volume)
 
@@ -238,7 +244,7 @@ if (__name__ == "__main__"):
 
     symbol = Symbol(venue = "BINANCE", symbol = "BTCUSDT", quote = "USDT",
         base = "BTC", id = "BINANCE_BTCUSDT", min_price_diff = 1e-2, min_order_size = 1)
-    candle = Candle(tf = TimeFrame.M4, symbol = symbol, time = Timestamp.now("UTC"),
+    candle = Candle(tf = TimeFrame.M4, symbol = symbol, time = Timestamp.now(TZ),
         oa = 10000, ha = 10001, la = 9999, ca = 10002, volume = 10000)
     print(candle)
     print(candle.__dict__)
@@ -246,7 +252,7 @@ if (__name__ == "__main__"):
     # Example: Create and display a Balance point
 
     account = Account(id="TEST_ACC1", venue="BINANCE")
-    balance = Balance(account=account, balance=1000.0, equity=1200.0, margin=100.0, time=Timestamp.now("UTC"))
+    balance = Balance(account=account, balance=1000.0, equity=1200.0, margin=100.0, time=Timestamp.now(TZ))
     print(balance)
     print(balance.__dict__)
     print(f"uPNL: {balance.uPNL}")

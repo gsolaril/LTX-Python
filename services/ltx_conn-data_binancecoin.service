@@ -7,8 +7,8 @@ Wants=network-online.target
 Type=simple
 User=gaston
 Group=gaston
-WorkingDirectory=/srv/shared/LTX-Python
-ExecStart=/srv/shared/.venv/bin/python src/connectors/main.py binancecoin
+WorkingDirectory=~
+ExecStart=/srv/shared/.venv/bin/ltx connectors/binancecoin
 Restart=on-failure
 RestartSec=5
 
