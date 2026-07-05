@@ -1,5 +1,6 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 import asyncio
+from tkinter.constants import NONE
 from typing import ClassVar
 from collections import deque
 from pandas import DataFrame, concat
@@ -33,6 +34,7 @@ class DataCollector(StreamingAgent):
         self._crons[self.record] = TimeFrame.M1.value
         self._reporter = Reporter(name = "DataCollector")
         self._scan_ready = asyncio.Event()
+        self._recorded = None
         self.config_verbose()
  
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -85,11 +87,30 @@ class DataCollector(StreamingAgent):
         if df.empty: return Log.warning("No rows written to ClickHouse")
         df = df.groupby(df.index.names).agg([*agg.keys()])
         df = df.rename(columns = agg, errors = "ignore")
-        df["since"] = df["since"].dt.strftime("%m/%d %H:%M")
+
+        if self._recorded is not None:
+            new = df.loc[df.index.difference(self._recorded.index)]
+            self._recorded = concat((self._recorded, new), axis = "index")
+            self._recorded["count"] = self._recorded["count"].fillna(0)
+            self._recorded["count"] = self._recorded["count"] + df["count"]
+            self._recorded["since"] = self._recorded["since"].fillna(df["since"])
+            self._recorded["until"] = df["until"]
+        else: self._recorded = df
+
+        df = df.reset_index("tf")
+        sub_minute = df["tf"].str[0].isin({*"ST"})
+        df["since"] = df["since"].dt.strftime("%m/%d %H:%M:%S")
         df["until"] = df["until"].dt.strftime("%m/%d %H:%M:%S")
-        df = df.sort_index().unstack("tf")
-        df = df.swaplevel(axis = "columns").sort_index(axis = "columns")
-        Log.success("Wrote to ClickHouse...\n" + df.to_string(max_rows = 20))
+        df.loc[~ is_sub_minute, "until"] = df["until"].str[: -2]
+        df = df.set_index("tf", append = True).sort_index()
+        df["since"] = df["since"].str[: -2]
+
+        df = self._recorded.unstack("tf")
+        df = df.swaplevel(axis = "columns")
+        df = df.sort_index(axis = "columns")
+        verbose = "Wrote to ClickHouse...\n"
+        verbose += df.to_string(max_rows = 20)
+        Log.success(verbose)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def scan(self):

@@ -1,7 +1,7 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 import os, json, subprocess
-from getpass import getpass
 from pathlib import Path
+from getpass import getpass, getuser
 from configparser import ConfigParser
 from hvac import Client as VaultClient
 from subprocess import Popen
@@ -17,7 +17,7 @@ STARTUP_ERRORS = list()
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class Config(NamedTuple):
-    USER: str = os.getlogin()
+    USER: str = getuser()
     SESSION_NAME: str = __name__
     LOG_TO_FILE: bool = True
     LOG_TO_LDB: bool = False

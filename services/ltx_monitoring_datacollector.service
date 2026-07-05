@@ -7,8 +7,8 @@ Wants=network-online.target
 Type=simple
 User=gaston
 Group=gaston
-WorkingDirectory=/srv/shared/LTX-Python
-ExecStart=/srv/shared/.venv/bin/python src/main.py monitoring/datacollector
+WorkingDirectory=~
+ExecStart=/srv/shared/.venv/bin/python LTX-Python/src/main.py monitoring/datacollector
 Restart=on-failure
 RestartSec=5
 
