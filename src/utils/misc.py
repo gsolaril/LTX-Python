@@ -116,5 +116,6 @@ class Reporter(defaultdict[str, Report]):
         df["entry_at"] = df["entry_at"].dt.strftime("%H:%M:%S.%f").str[: -3]
         if (df.shape[0] <= self.print_limit): df = df.sort_index()
         else: df = df.sort_values("total_count", ascending = False)
-        verbose = f"Reporter \"{self.name}\" ongoing since \"{self.start_at}\":"
+        start_str = self.start_at.strftime("%Y/%m/%d %H:%M")
+        verbose = f"Reporter \"{self.name}\" ongoing since \"{start_str}\":"
         return verbose + "\n" + df.to_string(max_rows = self.print_limit)

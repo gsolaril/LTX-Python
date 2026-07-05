@@ -22,7 +22,8 @@ class BasePoint:
         now = Timestamp.now(TZ)
         if self.time is None: self.time = now
         delay_s = (now - self.time).total_seconds()
-        if (self.dus is None): self.dus = int(delay_s * 1e6)
+        if (self.dus is not None): self.dus = int(self.dus)
+        else: self.dus = int(delay_s * 1e6)
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def time_us(self): return int(self.time.timestamp() * 1e6)

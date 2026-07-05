@@ -2,49 +2,39 @@
 import asyncio
 from typing import ClassVar
 from collections import deque
-from pandas import Series, DataFrame
+from pandas import DataFrame, concat
 from pandas import Timestamp, Timedelta
 from dataclasses import dataclass, field
-from src.models import *
+from src.models import TimeFrame, StreamingAgent
+from src.models import Quote, Tick, Candle, Symbol
 from src.utils import *
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class StreamingBundle(Bundle):
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def resample_candles(self, time: Timestamp = None):
-        recent: deque = super().resample_candles(time)
-        candle: Candle = None
-        for candle in recent:
-            if (candle.tf <= TimeFrame.MIN): continue
-            if not self._has_data(candle): continue
-            EventLoop.create_task(self.publish_candle(candle))
-            print(candle)
-        return recent
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def publish_candle(self, candle: Candle):
-        return candle
-
 #▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class Aggregator(BaseAgent):
+@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class Aggregator(StreamingAgent):
+    batch_size: int = field(init = False, kw_only = True, default = 1000)
     freq_scan: int = field(init = False, kw_only = True, default = 60)
+    tfs: str = field(init = False, kw_only = True, default = "S1 M1")
     STREAM_PREFIX: ClassVar[str] = "DATA"
-    TS_TICKS: ClassVar[str] = "history_ticks"
-    TS_CANDLES: ClassVar[str] = "history_candles"
+    TS_TICKS: ClassVar[ClickHouse.Table] = ClickHouse.Table.TICKS
+    TS_CANDLES: ClassVar[ClickHouse.Table] = ClickHouse.Table.CANDLES
+    TABLE_CONFIG: ClassVar[Postgres.Table] = Postgres.Table.MONITORING
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
         self._xstreams = dict[str, str]()
-        self._reporter = Reporter(name = "Aggregator")
+        self._queues: dict[str, asyncio.Queue] = {
+            Tick: asyncio.Queue(maxsize = self.maxlen),
+            Candle: asyncio.Queue(maxsize = self.maxlen)}
         self._crons[self.scan] = Timedelta(seconds = self.freq_scan)
-        self._crons[self.report] = Timedelta(seconds = self.freq_report)
-        self._crons[self.resample] = TimeFrame.MIN.value
-        self._bundle = StreamingBundle(maxlen = self.maxlen)
+        self._crons[self.report] = Timedelta(seconds = self.freq_redis_report)
+        self._crons[self.record] = TimeFrame.M1.value
+        self._reporter = Reporter(name = "Aggregator")
         self._scan_ready = asyncio.Event()
-
+        self.config_verbose()
+ 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def setup(self):
         tasks = await super().setup()
@@ -52,19 +42,15 @@ class Aggregator(BaseAgent):
             self.main(), name = f"{self.name}/main"))
         return tasks
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def resample(self):
-        last = Timestamp.now(TZ).floor(TimeFrame.MIN.value)
-        result = self._bundle.resample_ticks(last)
-        if result is None: return
-        ticks, candles = result
-        candles.extend(self._bundle.resample_candles(last))
-        if ticks: await self.write_ticks(list(ticks))
-        if candles: await self.write_candles(list(candles))
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def write(self, series: list[Tick | Candle]):
-        for item in series:
-            row = item.__dict__["payload"]
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def write(self, queue: asyncio.Queue):
+        copy = deque(maxlen = self.batch_size)
+        while len(copy) < copy.maxlen:
+            if queue.empty(): break
+            copy.append(queue.get_nowait())
+        while copy:
+            item: Quote = copy.popleft()
+            row = dict(item.__dict__["payload"])
             row["venue"] = item.symbol.venue
             row["symbol"] = item.symbol.symbol
             row["time"] = item.time
@@ -72,21 +58,49 @@ class Aggregator(BaseAgent):
                 row["tf"] = item.tf.name
             yield row
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @ClickHouse.to_series(series = TS_TICKS)
-    def write_ticks(self, series: list[Tick]):
-        yield from self.write(series)
+    @ClickHouse.to_table(table = TS_TICKS)#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def write_ticks(self): yield from self.write(self._queues[Tick])
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @ClickHouse.to_series(series = TS_CANDLES)
-    def write_candles(self, series: list[Candle]):
-        candles = [c for c in series
-            if (c.volume > 0) or (c.oa is not None)]
-        yield from self.write(candles)
+    @ClickHouse.to_table(table = TS_CANDLES)#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def write_candles(self): yield from self.write(self._queues[Candle])
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def record(self):
+        Log.info("Recording...")
+        agg = {"first": "since", "last": "until", "count": "count"}
+
+        dft = DataFrame(columns = Tick.INDEX_KEYS)
+        columns, data = await self.write_ticks.flush()
+        if data: dft = DataFrame(data, columns = columns)
+        dft = dft[Tick.INDEX_KEYS]
+        dft["tf"] = "T1"
+
+        dfc = DataFrame(columns = Candle.INDEX_KEYS)
+        columns, data = await self.write_candles.flush()
+        if data: dfc = DataFrame(data, columns = columns)
+        dfc = dfc[Candle.INDEX_KEYS]
+
+        df = concat((dft, dfc)).sort_index()
+        df = df.set_index(Candle.INDEX_KEYS[: -1])["time"]
+        if df.empty: return Log.warning("No rows written to ClickHouse")
+        df = df.groupby(df.index.names).agg([*agg.keys()])
+        df = df.rename(columns = agg, errors = "ignore")
+        df["since"] = df["since"].dt.strftime("%m/%d %H:%M")
+        df["until"] = df["until"].dt.strftime("%m/%d %H:%M:%S")
+        df = df.sort_index().unstack("tf")
+        df = df.swaplevel(axis = "columns").sort_index(axis = "columns")
+        Log.success("Wrote to ClickHouse...\n" + df.to_string(max_rows = 20))
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def scan(self):
         new = set[str]()
         self._reporter.add("*Scanning")
-        async for stream in Redis.scan():
+        pat = Redis.STREAM_PREFIX + "|*"
+        self._tfs = set(self.tfs.split(" "))
+        suffixes = self._tfs.union({"T1"})
+        async for stream in Redis.scan(pat):
+            tf = str.split(stream, "|")[-1]
+            if tf not in suffixes: continue
             if stream not in self._xstreams:
                 self._xstreams[stream] = ">"
                 new.add(stream)
@@ -101,28 +115,30 @@ class Aggregator(BaseAgent):
     async def report(self):
         freq = self._crons[self.report]
         next_at = Timestamp.now(TZ).ceil(freq)
-        self._reporter.close_batch()
         report = self._reporter.to_string(next_at)
+        self._reporter.close_batch()
         if report: Log.info(report)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def process(self, stream: str, message_id: str, payload: dict):
         self._reporter.add(stream)
         ms, us = map(int, message_id.split("-"))
-        _, _, venue, symbol, tfs = stream.split("|")
+        _, _, venue, symbol, tf = stream.split("|")
         payload["symbol"] = Symbol(venue = venue, symbol = symbol)
         payload["time"] = Timestamp(ms * 1e3 + us, unit = "us", tz = "UTC")
-        for key in ("pa", "qa", "pb", "qb", "oa", "ha", "la", "ca",
-                    "ob", "hb", "lb", "cb", "volume", "dus"):
-            if key in payload and payload[key] is not None:
-                payload[key] = float(payload[key])
-        if (tfs == "T1"):
-            self._bundle.on_tick(Tick(**payload))
-        elif tfs in TimeFrame:
-            payload["tf"] = TimeFrame[tfs]
-            payload["volume"] = int(payload.get("volume", 0) or 0)
-            self._bundle.on_candle(Candle(**payload))
-
+        #for key in ("pa", "qa", "pb", "qb", "oa", "ha", "la", "ca",
+        #            "ob", "hb", "lb", "cb", "volume", "dus"):
+        #    if (value := payload.get(key, None)) is not None:
+        #        payload[key] = float(value)
+        # Log.debug(f"Processing {tf} -> {payload!r}")
+        if tf in self._tfs:
+            payload["volume"] = int(payload.pop("volume", 0))
+            obj = Candle(**payload, tf = TimeFrame[tf])
+            await self._queues[Candle].put(obj)
+        elif tf.startswith("T"):
+            obj = Tick(**payload)
+            await self._queues[Tick].put(obj)
+            
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def main(self):
         await self._scan_ready.wait()

@@ -4,8 +4,8 @@ from getpass import getpass
 from dataclasses import dataclass, field
 from pandas import Timestamp, Timedelta
 from typing import Any, ClassVar, NamedTuple
-from src.models import Symbol, TimeFrame
-from src.models import BaseAgent, Quote, Bundle
+from src.models import ControllableAgent, Bundle
+from src.models import Symbol, TimeFrame, Quote
 from src.utils import *
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
@@ -76,15 +76,19 @@ class StreamingBundle(Bundle):
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class Connector(BaseAgent):
+@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class Connector(ControllableAgent):
+    sources: set[str] = field(init = False,
+      kw_only = True, default_factory = set)
     VENUE: ClassVar[str] = ...
-    TABLE_CONFIG: ClassVar[str] = "connectors"
     IGNORE_TFS: ClassVar[set[TimeFrame]] = set()
+    TABLE_CONFIG: ClassVar[Postgres.Table] = Postgres.Table.CONNECTORS
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
+        self.name = self.VENUE
         self._offset = Timedelta(0)
+        self._symbols = set[str]()
         self._streams = dict[str, object]()
         self._subs_new = dict[str, set]()
         self._subs_old = dict[str, set]()
@@ -102,33 +106,14 @@ class Connector(BaseAgent):
               stream(self), name = stream_name))
         return tasks
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Postgres.on_table(TABLE_CONFIG)
-    async def reconfig(self, conn):
-        await self.update_config(conn)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Postgres.on_table(TABLE_CONFIG)#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self, conn: asyncpg.Connection):
+        await super().reconfig(conn)
         await self.update_specs(conn)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def get_stream_names(self, streams: set[str]): ...
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_config(self, conn: asyncpg.Connection):
-        FIELDS, TABLE = self.FIELDS_STR, self.TABLE_CONFIG
-        query = f"SELECT {FIELDS} FROM {TABLE} WHERE (name = '{self.VENUE}');"
-        row = await conn.fetchrow(query)
-        if row is None: return Log.error(
-            f"No config found for \"{self.VENUE}\":\n => {query}")
-        config = dict[str, Any](row)
-        report_freq = Timedelta(seconds = config["freq_report"])
-        self._crons[Redis.report] = report_freq
-        self.last_updated = Timestamp.now(TZ)
-        symbols = config.pop("symbols", None)
-        if symbols: symbols = json.loads(symbols)
-        config["symbols"] = symbols
-        for key, value in config.items():
-            if (key == "symbols"): continue
-            if (key == "name"): continue
-            setattr(self, key, value)
-        return config
     
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update_specs(self, conn: asyncpg.Connection, symbols: set = None):
@@ -143,22 +128,11 @@ class Connector(BaseAgent):
         for item in result: self._specs[item["symbol"]] = Symbol(**item)
         while (len(self._specs) >= self.maxlen): self._specs.popitem(last = False)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def update_verbose(self):
-        verbose = f"Config for \"{self.VENUE}\" updated:"
-        for field in self.__dataclass_fields__.keys():
-            if field[0].isupper(): continue
-            value = getattr(self, field)
-            verbose += f"\n => \"{field}\": {value!r}"
-        Log.info(verbose)
-
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataConnector(Connector):
-    symbols: set[str] = field(init = False,
-      kw_only = True, default_factory = set)
     STREAM_PREFIX: ClassVar[str] = "DATA"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def get_stream_names(self, streams: set[str]):
@@ -167,37 +141,25 @@ class DataConnector(Connector):
         for symbol in streams:
             kw["symbol"] = symbol
             stream_names.add(
-                Quote.STREAM_KEY.format(tf = "T1", **kw))
+                Quote.STREAM_KEY.format(**kw, tf = "T1"))
             for tf in TimeFrame: stream_names.add(
-                Quote.STREAM_KEY.format(tf = tf.name, **kw))
+                Quote.STREAM_KEY.format(**kw, tf = tf.name))
         return stream_names
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_config(self, conn: asyncpg.Connection):
-        config: dict = await super().update_config(conn)
-        return config["symbols"]
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Postgres.on_table(Connector.TABLE_CONFIG)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Postgres.on_table(Connector.TABLE_CONFIG)#█▄▄▄▄▄▄
     async def reconfig(self, conn: asyncpg.Connection):
-        symbols_new, symbols_old = set[str](), set[str]()
-        symbols_config = await self.update_config(conn)
-        for symbol, keep in dict.items(symbols_config):
-            available = (symbol in self.symbols)
-            if available and keep: continue
-            elif available and not keep:
-                self.symbols.remove(symbol)
-                symbols_old.add(symbol)
-            elif not available and keep:
-                self.symbols.add(symbol)
-                symbols_new.add(symbol)
-
-        await self.update_specs(conn, self.symbols)
+        await super().reconfig(conn)
+        symbols_config: set = self.sources.copy()
+        symbols_old = self._symbols.difference(symbols_config)
+        symbols_new = symbols_config.difference(self._symbols)
+        await self.update_specs(conn, self._symbols)
         streams = self.get_stream_names(symbols_new)
         if streams: await Redis.add_streams(streams, self)
         for name in self._subs_new.keys():
             self._subs_new[name].update(symbols_new)
             self._subs_old[name].update(symbols_old)
         
-        self.update_verbose()
+        self.config_verbose()
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

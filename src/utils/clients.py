@@ -43,6 +43,7 @@ Log.info(f"Master config:\n => {Config!r}")
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄
 class Postgres:
+    #▄▄▄▄▄▄▄▄▄▄▄
     @classmethod
     def create(cls):
         creds: Credentials = Credentials.get_for("postgres")
@@ -70,6 +71,11 @@ class PostgresManager:
       AFTER INSERT OR UPDATE OR DELETE ON {0}
       FOR EACH STATEMENT EXECUTE FUNCTION notify_{0}();
       """
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    class Table(enum.StrEnum):
+        CONNECTORS = "connectors"
+        MONITORING = "monitoring"
+        SYMBOLS = "symbol_specs"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, client: asyncpg.Pool):
         self._to_listen = dict[str, Callable]()
@@ -100,15 +106,17 @@ class PostgresManager:
                 if (func := self._to_listen.get(table)) is None: continue
                 async with self._client.acquire() as conn: await func(src, conn)
             except Exception as EXC: Log.exception(EXC); return conn.close()
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def on_table(self, table: str):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def on_table(self, table: Table):
+        def noop(func: Callable): return func
         def decorator(func: Callable):
             @functools.wraps(func)
             async def wrapped(*args, **kwargs):
                 return await func(*args, **kwargs)
-            self._to_listen[table] = wrapped
+            self._to_listen[table.value] = wrapped
             return wrapped
-        return decorator
+        if not isinstance(table, self.Table): return noop
+        else: return decorator
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
@@ -120,13 +128,13 @@ class Redis:
         host, port = creds.IP.split(":")
         #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         async def test():
-            query = "SET test test"
-            args = {"host": host, "port": int(port),
-                "username": creds.USERNAME, "db": 0,
-                "password": creds.PASSWORD,
-                "decode_responses": True}
+            tstr = Timestamp.now(TZ).strftime("%Y%m%d%H%M%S%f")
+            args = {"decode_responses": True, "host": host, "port": int(port),
+              "username": creds.USERNAME, "password": creds.PASSWORD, "db": 0}
             client = RedisClient(**args)
-            assert await client.execute_command(query) == "OK"
+            query_1, query_2 = f"SET test {tstr}", f"GET test"
+            assert (await client.execute_command(query_1) == "OK")
+            assert (await client.execute_command(query_2) == tstr)
             return client
         return EventLoop.run_until_complete(test())
 
@@ -200,7 +208,7 @@ class RedisManager:
         return await self._ready.wait()
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def report(self, src: Any):
-        freq = Timedelta(seconds = src.freq_report)
+        freq = Timedelta(seconds = src.freq_redis_report)
         next_at = Timestamp.now(TZ).ceil(freq)
         self._reporter.close_batch()
         report = self._reporter.to_string(next_at)
@@ -264,47 +272,79 @@ class ClickHouse:
 class ClickHouseManager:
     VERBOSE_PUSH = "Pushed {0} rows to \"{1}\":\n => {2}"
     VERBOSE_ERROR = "Failed to write to \"{0}\":"
-    CH_DTYPES = {type(None): lambda X: "NULL", bool: lambda X: str(X).upper(),
-          Timestamp: lambda X: Timestamp.strftime(X, "%Y-%m-%d %H:%M:%S.%f"),
-          str: lambda X: f"'{X}'"}
+    INT_COLUMNS = {"volume", "dus"}
+    FLOAT_COLUMNS = {"pa", "qa", "pb", "qb",
+        "oa", "ha", "la", "ca", "ob", "hb", "lb", "cb"}
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    class Table(enum.StrEnum):
+        TICKS = "history_ticks"
+        CANDLES = "history_candles"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, client: ClickHouseClient):
         self._client: ClickHouseClient = client
         self._ready = set[str]()
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def write(self, series: str, gen: Iterable[dict]):
-        query, sep, n_rows = "", ", ", dict()
-        for row in gen:
-            line = "\n    ("
-            for value in row.values():
-                dtype = type(value)
-                dfunc = self.CH_DTYPES.get(dtype, str)
-                line = line + dfunc(value) + sep
-            query += sep + line.rstrip(sep) + ")"
-            
-        if (len(query) > 0):
-            fields, query = str.join(sep, row.keys()), query.rstrip(sep)
-            query = f"INSERT INTO {series} ({fields}) VALUES ({query}\n);"
-            n_rows = self._client.execute(query, types_check = True)
-        else: Log.warning(f"Warning: No rows written to \"{series}\"")
-        return n_rows
+    def parse(self, row: dict, columns: list[str]):
+        values = list()
+        for col in columns:
+            value = row.get(col)
+            if isinstance(value, Timestamp):
+                value = value.to_pydatetime()
+            values.append(value)
+        return tuple(values)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def to_series(self, func: Callable = None, *, series: str):
-        def decorator(func: Callable):
-            @functools.wraps(func)
-            async def wrapped(*args, **kwargs):
-                try:
-                    gen = func(*args, **kwargs)
-                    assert (n_rows := await asyncio.to_thread(self.write, series, gen)) > 0
-                    Log.info(self.VERBOSE_PUSH.format(sum(n_rows.values()), series, n_rows))
-                except AssertionError: Log.error(f"No rows written to \"{series}\"")
-                except Exception as EXC:
-                    Log.exception(self.VERBOSE_ERROR.format(series), EXC)
-            return wrapped
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def write(self, table: str, rows: Iterable[dict]):
+        columns, data = None, list()
+        for row in rows:
+            if columns is None: columns = list(row.keys())
+            data.append(self.parse(row, columns))
+        if data:
+            fields = str.join(", ", columns)
+            query = f"INSERT INTO {table} ({fields}) VALUES"
+            self._client.execute(query, data, types_check = True)
+        else: Log.warning(f"No rows written to \"{table}\"")
+        return columns, data
+
+    async def _flush(self, table: str, func: Callable, instance, *args, **kwargs):
+        columns, data = None, list()
+        for row in func(instance, *args, **kwargs):
+            if columns is None: columns = list(row.keys())
+            data.append(self.parse(row, columns))
+        if data:
+            fields = str.join(", ", columns)
+            query = f"INSERT INTO {table} ({fields}) VALUES"
+            await asyncio.to_thread(self._client.execute, query, data, True)
+        else: Log.warning(f"No rows written to \"{table}\"")
+        return columns, data
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def to_table(self, func: Callable[Iterable[dict]] = None, *, table: Table):
+        def decorator(func: Callable[Iterable[dict]]):
+            return self._ToTable(self, table.value, func)
         if func is None: return decorator
         return decorator(func)
+
+    class _ToTable:
+        def __init__(self, manager: "ClickHouseManager", table: str, func: Callable):
+            self._manager, self._table, self._func = manager, table, func
+            functools.update_wrapper(self, func)
+
+        def __call__(self, instance, *args, **kwargs):
+            try: return self._manager.write(self._table, self._func(instance, *args, **kwargs))
+            except Exception as EXC: Log.exception(EXC); return None, list()
+
+        def __get__(self, instance, owner = None):
+            if instance is None: return self
+            bound = functools.partial(self.__call__, instance)
+            functools.update_wrapper(bound, self._func)
+            async def flush(*args, **kwargs):
+                try: return await self._manager._flush(
+                    self._table, self._func, instance, *args, **kwargs)
+                except Exception as EXC: Log.exception(EXC); return None, list()
+            bound.flush = flush
+            return bound
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀       
@@ -312,9 +352,7 @@ try:
     Redis: RedisManager = RedisManager(Redis.create())
     ClickHouse: ClickHouseManager = ClickHouseManager(ClickHouse.create())
     Postgres: PostgresManager = PostgresManager(Postgres.create())
-except Exception as EXC:
-    Log.exception(EXC)
-    sys.exit(1)
+except Exception as EXC: Log.exception(EXC); sys.exit(1)
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 if __name__ == "__main__":
