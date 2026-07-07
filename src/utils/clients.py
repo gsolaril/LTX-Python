@@ -128,6 +128,14 @@ class RedisManager:
         self._ready = asyncio.Event()
         self._streams = set[str]()
         self._ncp = 0.0
+        self._queue = None
+        self._pending = deque()
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def _enqueue(self, payload: dict):
+        if self._queue is not None:
+            self._queue.put_nowait(payload)
+        else: self._pending.append(payload)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def scan(self, pattern: str = STREAM_PREFIX + "|*"):
         async for K in self._client.scan_iter(pattern): yield K
@@ -188,7 +196,7 @@ class RedisManager:
                     results.append(obj)
                     if (obj is None): continue
                     payload: dict = obj.__dict__
-                    self._queue.put_nowait(payload)
+                    self._enqueue(payload)
                 return results
             return wrapped
         if func is None: return decorator
@@ -197,6 +205,8 @@ class RedisManager:
     async def __call__(self, src: Any):
         self._queue = Queue(maxsize = src.maxlen,
             checkpoints = self.CHECKPOINTS.copy())
+        while self._pending:
+            self._queue.put_nowait(self._pending.popleft())
         self._ready.set()
         while src.active:
             while (N := self._queue.qsize()) == 0:

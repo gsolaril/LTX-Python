@@ -107,19 +107,20 @@ class Connector(ControllableAgent):
         return tasks
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Postgres.on_table(TABLE_CONFIG)#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def reconfig(self, conn: asyncpg.Connection):
-        await super().reconfig(conn)
-        await self.update_specs(conn)
+    @Postgres.on_table(TABLE_CONFIG)#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self, conn: asyncpg.Connection, venue: str = None):
+        await super().reconfig(conn); await self.update_specs(conn, venue)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def get_stream_names(self, streams: set[str]): ...
     
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_specs(self, conn: asyncpg.Connection, symbols: set = None):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update_specs(self, conn: asyncpg.Connection,
+                  venue: str = None, symbols: set = None):
+        table = self.TABLE_SYMBOLS
+        if (venue is None): venue = self.VENUE
         if (symbols is None): symbols = set(self._specs)
-        TABLE, VENUE = self.TABLE_SYMBOLS, self.VENUE
-        query = f"SELECT * FROM {TABLE} WHERE (venue = '{VENUE}')"
+        query = f"SELECT * FROM {table} WHERE (venue = '{venue}')"
         if (len(symbols) > 0): 
             symbols_str = str.join(", ", [f"'{S}'" for S in symbols])
             query = query + " AND (symbol IN ({}))".format(symbols_str)
