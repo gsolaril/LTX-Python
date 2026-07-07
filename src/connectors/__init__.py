@@ -5,8 +5,9 @@ from .ws import *
 connectors_agents = {
     "connectors/binanceusdm": DataBinanceUsdm,
     "connectors/binancecoin": DataBinanceCoin,
-    "connectors/binancespot": DataBinanceSpot
+    "connectors/binancespot": DataBinanceSpot,
+    "connectors/polymarketgamma": PolymarketGamma
 }
 __all__ = ["connectors_agents"]
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-#███████████████████████████████████████████████████████████████████████████████████████████#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+#███████████████████████████████████████████████████████████████████████████████████████████

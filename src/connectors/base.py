@@ -78,8 +78,7 @@ class StreamingBundle(Bundle):
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class Connector(ControllableAgent):
-    sources: set[str] = field(init = False,
-      kw_only = True, default_factory = set)
+    sources: set[str] = field(init = False, kw_only = True, default_factory = set)
     VENUE: ClassVar[str] = ...
     IGNORE_TFS: ClassVar[set[TimeFrame]] = set()
     TABLE_CONFIG: ClassVar[Postgres.Table] = Postgres.Table.CONNECTORS
@@ -89,6 +88,7 @@ class Connector(ControllableAgent):
         self.name = self.VENUE
         self._offset = Timedelta(0)
         self._symbols = set[str]()
+        self._specs = dict[str, Symbol]()
         self._streams = dict[str, object]()
         self._subs_new = dict[str, set]()
         self._subs_old = dict[str, set]()
