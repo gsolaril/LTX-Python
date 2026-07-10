@@ -148,12 +148,13 @@ class DataConnector(Connector):
         return stream_names
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Postgres.on_table(Connector.TABLE_CONFIG)#█▄▄▄▄▄▄
-    async def reconfig(self, conn: asyncpg.Connection):
-        await super().reconfig(conn)
-        symbols_config: set = self.sources.copy()
-        symbols_old = self._symbols.difference(symbols_config)
-        symbols_new = symbols_config.difference(self._symbols)
-        await self.update_specs(conn, self._symbols)
+    async def reconfig(self, conn: asyncpg.Connection,
+              venue: str = None, symbols: set = None):
+        await super().reconfig(conn, venue)
+        if symbols is None: symbols: set = self.sources.copy()
+        symbols_old = self._symbols.difference(symbols)
+        symbols_new = symbols.difference(self._symbols)
+        await self.update_specs(conn, venue, self._symbols)
         streams = self.get_stream_names(symbols_new)
         if streams: await Redis.add_streams(streams, self)
         for name in self._subs_new.keys():

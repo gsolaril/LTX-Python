@@ -1,10 +1,10 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 import asyncio, asyncpg, json
 from aiohttp import ClientSession
-from pandas import Timestamp, Timedelta
 from dataclasses import dataclass, field
 from typing import Any, List, Dict, ClassVar
-from src.connectors.base import Venue, Connector
+from pandas import Series, DataFrame, Timestamp
+from src.connectors.base import Venue, DataConnector
 from src.models import *
 from src.utils import *
 
@@ -25,7 +25,7 @@ class Polymarket(Venue):
     @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class TokenUpdate(DataPoint):
         index: str = field(kw_only = True, default = "IDS")
-        STREAM_KEY: ClassVar[str] = "{venue}|GAMMA"
+        STREAM_KEY: ClassVar[str] = "Polymarket|GAMMA"
         #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def __post_init__(self):
             super().__post_init__()
@@ -39,16 +39,17 @@ class Polymarket(Venue):
         ts = ts.floor(tf.value)
         if (tf != TimeFrame.H1):
             ts_int = int(Timestamp.timestamp(ts))
-            return f"{symbol.lower()}-updown-{tf_str}-{ts_int}"
+            return f"{symbol.lower()}-updown-{tf_str}-{ts_int}".lower()
         else:
-            ts_str = Timestamp.strftime(ts - tf.value, "%b-%d-%Y-%I%p")
-            return f"{mapper[symbol]}-up-to-down-{ts_str}-et"
+            ts_str = Timestamp.strftime(ts - tf.value, "%B-%-d-%Y-%-I%p")            
+            return f"{mapper[symbol]}-up-or-down-{ts_str}-et".lower()
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def split_symbol(cls, symbol: str):
         if "↑" in symbol: symbol, tf_str = symbol.split("↑")
         elif "↓" in symbol: symbol, tf_str = symbol.split("↓")
+        tf_str = tf_str.split("+")[0]
         return symbol, TimeFrame[tf_str]
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -74,8 +75,8 @@ class Polymarket(Venue):
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class PolymarketGamma(Connector, Polymarket):
+@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class PolymarketGamma(DataConnector, Polymarket):
     VENUE: ClassVar[str] = Polymarket.VENUE
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self):
@@ -99,12 +100,13 @@ class PolymarketGamma(Connector, Polymarket):
             except Exception: clob_ids = None
         if not isinstance(clob_ids, list): return
 
-        ids = dict.fromkeys(cls.ARROWS_FROM_CHAR.values())
+        arrows = cls.ARROWS_FROM_CHAR
+        ids = dict.fromkeys(arrows.values())
         if len(outcomes) != len(clob_ids): return
         for nm, token in zip(outcomes, clob_ids):
-            ids[cls.ARROWS_FROM_CHAR[str(nm).strip()[0]]] = token
-        if (ids[cls.ARROWS_FROM_CHAR["U"]] is None): return
-        if (ids[cls.ARROWS_FROM_CHAR["D"]] is None): return
+            ids[arrows[str(nm).strip()[0]]] = token
+        if (ids[arrows["U"]] is None): return
+        if (ids[arrows["D"]] is None): return
         return ids
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -118,7 +120,8 @@ class PolymarketGamma(Connector, Polymarket):
             except Exception as EXC: return Log.exception(EXC)
             if isinstance(data, list) and len(data): return data[0]
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update_ids(self, shifts: int = 2):
         verbose, pending = dict(), dict()
         for symbol_obj in self._specs.values():
@@ -128,6 +131,7 @@ class PolymarketGamma(Connector, Polymarket):
                 pending[(*key, shift)] = None
             verbose[key] = "{}_{!r}".format(*key)
 
+        tf: TimeFrame = None
         now = Timestamp.now("UTC")
         keys = list(pending.keys())
         Log.info(f"Getting IDs:\n -> " + str.join(", ", verbose.values()))
@@ -142,23 +146,30 @@ class PolymarketGamma(Connector, Polymarket):
             if (parsed is None): continue
             (symbol, tf, shift) = key
             for arrow in self.ARROWS_FROM_CHAR.values():
-                key = f"{symbol}{arrow}{tf!r}+{shift}"
-                results[key] = (id := parsed[arrow])
-                verbose[key] = id[: 4] + "." + id[-4 :]
+                key = (f"{symbol}{arrow}", f"{tf!r}+{shift}")
+                results[key[0] + key[1]] = (id := parsed[arrow])
+                verbose[key] = id[: 4] + "..." + id[-4 :]
 
-        Log.success(f"Got IDs...\n -> {verbose}")
+        verbose = Series(verbose).sort_index()
+        verbose = verbose.rename_axis(["symbol", "tf"])
+        verbose = verbose.unstack("tf")
+        Log.success(f"Got IDs...\n{verbose}")
         yield self.TokenUpdate(data = results)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Postgres.on_table(Connector.TABLE_CONFIG)#█▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Postgres.on_table(DataConnector.TABLE_CONFIG)
     async def reconfig(self, conn: asyncpg.Connection):
-        await super().reconfig(conn, venue := Polymarket.VENUE)
-        main = f"UPDATE {self.TABLE_SYMBOLS} " "SET id = CASE\n {} \nEND"
-        line = (f"WHEN venue = '{venue}' " "AND symbol = '{}' THEN '{}'")
-        lines = list()
+        table, venue = self.TABLE_SYMBOLS, Polymarket.VENUE
+        query_lines = [f"UPDATE {table} SET id = CASE"]
+        line = "WHEN (symbol = '{}') THEN '{}'"
         update: Polymarket.TokenUpdate = None
-        async for update in self.update_ids():
+        await super().reconfig(conn, venue)
+        for update in await self.update_ids():
             for symbol, id in update.data.items():
-                lines.append(line.format(symbol, id))
-        query = main.format(str.join("\n\t", lines))
-        await conn.execute(query)
+                query_lines.append(line.format(symbol, id))
+        if (len(query_lines) <= 1): return
+        query_lines.append(f"ELSE id END WHERE (venue = '{venue}');")
+        query = str.join("\n" + 4 * " ", query_lines)
+        print(query)
+        n = (await conn.execute(query)).split(" ")[-1]
+        Log.info(f"Updated {n} Polymarket IDs in \"{table}\"")

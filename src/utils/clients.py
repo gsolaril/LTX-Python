@@ -221,8 +221,8 @@ class RedisManager:
                     assert (await self._client.xadd(stream, payload, id, src.maxlen))
                     if src.debug: Log.debug(self.VERBOSE_XADD.format(N, stream, id, payload))
                     self._reporter.add(suffix)
-                except Exception as EXC: Log.error(
-                    self.VERBOSE_ERROR.format(stream, payload), EXC)
+                except Exception as EXC:
+                    Log.exception(EXC)                    
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
