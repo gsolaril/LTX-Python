@@ -106,7 +106,7 @@ class DataStreamWS(StreamWS):
         stream_name = f"{src.name}/{self.name}"
         Log.warning(f"WS for \"{stream_name}\" channel loop started.")
         while src.active:
-            await asyncio.sleep(1)
+            await src._WS_to_resub.wait()
             await self._WS_connected.wait()
             if self._subs: await self.send_ping(True)
 
@@ -128,12 +128,14 @@ class DataStreamWS(StreamWS):
                         await self._WS.send_json(payload)
                     self._subs = self._subs | subs_new
                     src._subs_new[self.name].clear()
+                    src._WS_to_resub.clear()
                     self._subs_known.set()
                 if subs_old:
                     for payload in payload_old:
                         await self._WS.send_json(payload)
                     self._subs = self._subs - subs_old
                     src._subs_old[self.name].clear()
+                    src._WS_to_resub.clear()
             except Exception as EXC:
                 Log.exception(self.VERBOSE_NOCONN.format(stream_name, "sub"), EXC)
 

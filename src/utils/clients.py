@@ -1,5 +1,5 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import sys, asyncio, json, asyncpg, functools, enum
+import sys, asyncio, json, asyncpg, functools, enum, time
 from pandas import DataFrame, Timestamp, Timedelta
 from typing import Any, Callable, ClassVar, Iterable
 from collections import deque
@@ -214,10 +214,11 @@ class RedisManager:
             else:
                 try:
                     payload: dict = await self._queue.get()
-                    suffix, time, payload = payload.values()
-                    id = str(time)[: -3] + "-" + str(time)[-3 :]
+                    suffix, time_event, payload = payload.values()
+                    id = str(time_event)[: -3] + "-" + str(time_event)[-3 :]
                     stream = str.join("|", [self.STREAM_PREFIX, src.STREAM_PREFIX, suffix])
                     if stream not in self._streams: await self.add_streams([suffix], src)
+                    payload["dus2"] = int(time.time() * 1e6 - time_event)
                     assert (await self._client.xadd(stream, payload, id, src.maxlen))
                     if src.debug: Log.debug(self.VERBOSE_XADD.format(N, stream, id, payload))
                     self._reporter.add(suffix)

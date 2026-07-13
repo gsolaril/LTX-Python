@@ -1,11 +1,11 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import asyncio, asyncpg, json
+import asyncio, asyncpg, json, datetime
 from collections import OrderedDict
 from typing import Any, ClassVar, Callable
 from dataclasses import dataclass, field
 from pandas import Timestamp, Timedelta
 from loguru import logger as Log
-from .misc import Symbol
+from .misc import Symbol, TimeFrame
 from src.utils import Postgres, Redis, TZ
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
@@ -50,8 +50,10 @@ class BaseAgent:
     async def setup(self):
         self.active = True
         tasks = list[asyncio.Task]()
-        for cron in self._crons.keys():
-            name = f"{self.name}/cron/{cron.__name__}"
+        for cron, freq in self._crons.items():
+            try: tf = TimeFrame(freq).name
+            except: tf = f"S{freq: int}"
+            name = f"{self.name}/cron/{cron.__name__}/{tf}"
             tasks.append(asyncio.create_task(
                 self.start_cron(cron), name = name))
         return tasks
@@ -78,6 +80,8 @@ class BaseAgent:
         for field in self.__dataclass_fields__.keys():
             if field[0].isupper(): continue
             value = getattr(self, field)
+            if isinstance(value, datetime.datetime):
+                value = value.isoformat(" ")
             verbose += f"\n => \"{field}\": {value!r}"
         Log.info(verbose)
 

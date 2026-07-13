@@ -99,6 +99,15 @@ class DataBinance(DataConnectorWS, Binance):
             get_subs = self.get_subs_klines, on_message = self.on_klines,
             on_ping = self.on_ping, url_args = self.get_url_headers_klines))
 
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __post_init__(self):
+        super().__post_init__()
+        self._crons[self.try_resub] = TimeFrame.S1.value
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def try_resub(self):
+        self._WS_to_resub.set()
+
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def get_urlh(self, path: str):
         base = self.url or type(self).URL_WS
@@ -142,6 +151,7 @@ class DataBinance(DataConnectorWS, Binance):
                qa = data["A"], pb = data["b"], qb = data["B"])
         self._bundle.on_tick(tick)
         yield tick
+        
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_klines(self, data: Dict):

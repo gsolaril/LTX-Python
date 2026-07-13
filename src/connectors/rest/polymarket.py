@@ -1,9 +1,10 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import asyncio, asyncpg, json
+import asyncio, asyncpg, json, time
+from bidict import bidict
 from aiohttp import ClientSession
 from dataclasses import dataclass, field
 from typing import Any, List, Dict, ClassVar
-from pandas import Series, DataFrame, Timestamp
+from pandas import Series, Timedelta, Timestamp
 from src.connectors.base import Venue, DataConnector
 from src.models import *
 from src.utils import *
@@ -20,15 +21,29 @@ class Polymarket(Venue):
     ARROWS_FROM_SIGN = {+1: "↑", -1: "↓"}
     ARROWS_FROM_CHAR = {"U": "↑", "D": "↓"}
     STATUS = {"live": "OK", "matched": "OK"}
-
+    
     #▄▄▄▄▄▄▄▄▄▄▄
-    @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    class TokenUpdate(DataPoint):
+    @dataclass#█▄▄▄▄▄▄▄▄▄▄
+    class Event(BasePoint):
         index: str = field(kw_only = True, default = "IDS")
         STREAM_KEY: ClassVar[str] = "Polymarket|GAMMA"
-        #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-        def __post_init__(self):
-            super().__post_init__()
+        MAP: ClassVar[bidict[str, str]] = bidict()
+        UPD_FREQ: ClassVar[int] = 300
+        #▄▄▄▄▄▄▄▄▄▄
+        @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+        def __dict__(self): return {"stream": self.STREAM_KEY,
+              "time": self.time_us, "payload": dict(self.MAP)}
+        #▄▄▄▄▄▄▄▄▄▄▄▄▄
+        @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+        def shift_keys(cls, shift: int = 1):
+            new_map: bidict[str, str] = bidict()
+            for old_symbol, id in cls.MAP.items():
+                key, old_shift = old_symbol.split("+")
+                new_shift = int(old_shift) - shift
+                if (new_shift < 0): continue
+                new_symbol = f"{key}+{new_shift}"
+                new_map[new_symbol] = id
+            cls.MAP = new_map
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -49,10 +64,10 @@ class Polymarket(Venue):
     def split_symbol(cls, symbol: str):
         if "↑" in symbol: symbol, tf_str = symbol.split("↑")
         elif "↓" in symbol: symbol, tf_str = symbol.split("↓")
-        tf_str = tf_str.split("+")[0]
-        return symbol, TimeFrame[tf_str]
+        tf_str, shift = tf_str.split("+")
+        return symbol, TimeFrame[tf_str], int(shift)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄ 
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def status_to_local(cls, response: dict):
         status = response.get("status", None)
@@ -78,9 +93,13 @@ class Polymarket(Venue):
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class PolymarketGamma(DataConnector, Polymarket):
     VENUE: ClassVar[str] = Polymarket.VENUE
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __init__(self):
+    freq_redis_report: int = field(kw_only = True,
+            default = Polymarket.Event.UPD_FREQ)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __post_init__(self):
         super().__post_init__()
+        self._crons[self.reconfig] = Timedelta(
+              seconds = self.freq_redis_report)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -111,65 +130,82 @@ class PolymarketGamma(DataConnector, Polymarket):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def _find_event(self, session: ClientSession,
-      symbol: str, tf: TimeFrame, ts: Timestamp = None):
+            symbol: str, tf: TimeFrame, shift: int = 0):
+        ts = Timestamp.now("UTC") + shift * tf.value
         args = {"url": self.url + "/events", "params": {
             "slug": self.slug(symbol, tf, ts)}}
         async with session.get(**args) as resp:
             if (resp.status != 200): return
-            try: data = await resp.json()
+            try: ids = await resp.json()
             except Exception as EXC: return Log.exception(EXC)
-            if isinstance(data, list) and len(data): return data[0]
+            if isinstance(ids, list) and len(ids): return ids[0]
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_ids(self, shifts: int = 2):
+    async def update_ids(self, shifts: int = 3):
+        time_event = Timestamp.now("UTC")
         verbose, pending = dict(), dict()
         for symbol_obj in self._specs.values():
             symbol: str = symbol_obj.symbol
-            key = self.split_symbol(symbol)
+            key = self.split_symbol(symbol)[: 2]
             for shift in range(shifts):
                 pending[(*key, shift)] = None
             verbose[key] = "{}_{!r}".format(*key)
 
         tf: TimeFrame = None
-        now = Timestamp.now("UTC")
         keys = list(pending.keys())
-        Log.info(f"Getting IDs:\n -> " + str.join(", ", verbose.values()))
+        Log.info(f"Getting event IDs:\n -> " + str.join(", ", verbose.values()))
         async with ClientSession() as session: events = await asyncio.gather(
-            *[self._find_event(session, symbol, tf, now + shift * tf.value)
-              for (symbol, tf, shift) in keys])
+            *[self._find_event(session, *item) for item in keys])
 
-        verbose, results = dict(), dict()
+        verbose = dict()
         for key, event in zip(keys, events):
+            (symbol, tf, shift) = key
             if (event is None): continue
             parsed = self._parse_ids(event)
             if (parsed is None): continue
-            (symbol, tf, shift) = key
             for arrow in self.ARROWS_FROM_CHAR.values():
-                key = (f"{symbol}{arrow}", f"{tf!r}+{shift}")
-                results[key[0] + key[1]] = (id := parsed[arrow])
-                verbose[key] = id[: 4] + "..." + id[-4 :]
+                prefix, suffix = f"{symbol}{arrow}", f"{tf!r}+{shift}"
+                self.Event.MAP[prefix + suffix] = (id := parsed[arrow])
+                verbose[(prefix, suffix)] = id[: 4] + "…" + id[-4 :]
 
-        verbose = Series(verbose).sort_index()
-        verbose = verbose.rename_axis(["symbol", "tf"])
-        verbose = verbose.unstack("tf")
-        Log.success(f"Got IDs...\n{verbose}")
-        yield self.TokenUpdate(data = results)
+        delay = (time.time() - time_event.timestamp()) * 1e6
+        verbose = Series(verbose).sort_index().dropna()
+        verbose = verbose.rename_axis(["symbol", "tf"]).unstack("tf")
+        Log.success(f"Got IDs... delay: {delay:.0f} μs...\n{verbose}")
+        yield self.Event(time = time_event)
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self):
+        conn = await Postgres._client.acquire()
+        await self._reconfig(conn)
+        self._crons[self.reconfig] = Timedelta(
+              seconds = self.freq_redis_report)
+        await conn.close()
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Postgres.on_table(DataConnector.TABLE_CONFIG)
-    async def reconfig(self, conn: asyncpg.Connection):
-        table, venue = self.TABLE_SYMBOLS, Polymarket.VENUE
-        query_lines = [f"UPDATE {table} SET id = CASE"]
-        line = "WHEN (symbol = '{}') THEN '{}'"
-        update: Polymarket.TokenUpdate = None
-        await super().reconfig(conn, venue)
-        for update in await self.update_ids():
-            for symbol, id in update.data.items():
-                query_lines.append(line.format(symbol, id))
-        if (len(query_lines) <= 1): return
-        query_lines.append(f"ELSE id END WHERE (venue = '{venue}');")
-        query = str.join("\n" + 4 * " ", query_lines)
-        print(query)
-        n = (await conn.execute(query)).split(" ")[-1]
-        Log.info(f"Updated {n} Polymarket IDs in \"{table}\"")
+    async def _reconfig(self, conn: asyncpg.Connection):
+        await super().reconfig(conn, Polymarket.VENUE)
+        query_id, query_exp = list[str](), list[str]()
+        condition = "WHEN (symbol = '{0}') THEN '{1}'"
+        line_upper = f"UPDATE {self.TABLE_SYMBOLS} SET"
+        line_lower = f"WHERE (venue = '{Polymarket.VENUE}');"
+
+        TAB = " " * 4
+        [*await self.update_ids()]
+        for symbol, id in self.Event.MAP.items():
+            quote, tf, shift = self.split_symbol(symbol)
+            query_id.append(2 * TAB + condition.format(symbol, id))
+            exp = Timestamp.now("UTC").ceil(tf.value) + shift * tf.value
+            exp_str = Timestamp.strftime(exp, "%Y-%m-%d %H:%M:%S+00:00")
+            query_exp.append(2 * TAB + condition.format(symbol, exp_str))
+
+        if not query_id or not query_exp: return
+        query_id.insert(0, TAB + "id = CASE")
+        query_id.append(TAB + "ELSE id END,")
+        query_exp.insert(0, TAB + "expiration = CASE")
+        query_exp.append(TAB + "ELSE expiration END")
+        query_lines = [line_upper, *query_id, *query_exp, line_lower]
+        n = (await conn.execute(str.join("\n", query_lines))).split(" ")[-1]
+        Log.info(f"Updated {n} Polymarket IDs in \"{self.TABLE_SYMBOLS}\"")

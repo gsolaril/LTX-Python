@@ -123,15 +123,14 @@ class Symbol(DBClass):
     def __post_init__(self):
         if self.quote is None: self.quote = "USD"
         if self.base is None: self.base = self.symbol
-        if self.id is None: self.id = self.venue + self.SEP + self.symbol
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def alias(self): return self.venue + self.SEP + self.symbol
     def __str__(self): return self.venue + self.SEP + self.symbol
     def __repr__(self):  return self.venue + self.SEP + self.symbol
-    def __eq__(self, other: "Symbol"): return (self.id == other.id)
-    def __ne__(self, other: "Symbol"): return (self.id != other.id)
-    def __hash__(self): return hash(self.id)
+    def __eq__(self, other: "Symbol"): return (str(self) == str(other))
+    def __ne__(self, other: "Symbol"): return (str(self) != str(other))
+    def __hash__(self): return hash(str(self))
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def is_expired(self, time: Timestamp = None):
         if (time is None): time = Timestamp.now(TZ)

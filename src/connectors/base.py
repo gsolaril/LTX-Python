@@ -96,6 +96,7 @@ class Connector(ControllableAgent):
         self._bundle = StreamingBundle(
               maxlen = 60, ignore_tfs = self.IGNORE_TFS.copy())
         self._crons[self._bundle.resample] = TimeFrame.MIN.value
+        self._WS_to_resub = asyncio.Event()
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def setup(self):
