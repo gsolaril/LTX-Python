@@ -32,6 +32,8 @@ class DataPolymarket(DataConnectorWS, Polymarket):
     def get_subs(self, symbols: set[str], is_sub: bool):
         payload = {"assets_ids": sorted(symbols), "channels": ["book"], 
                   "operation": "SUBSCRIBE" if is_sub else "UNSUBSCRIBE"}
+         # TODO: formulate "subs" as new/old symbols from reconfig...
+         # ...plus those whose event IDs have been updated/outdated.
         return subs, [payload]
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
