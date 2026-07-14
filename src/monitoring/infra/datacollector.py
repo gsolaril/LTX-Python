@@ -14,7 +14,7 @@ from src.utils import *
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataCollector(StreamingAgent):
-    maxlen: int = field(init = False, kw_only = True, default = 500000)
+    maxlen_local: int = field(init = False, kw_only = True, default = 500000)
     batch_size: int = field(init = False, kw_only = True, default = 100000)
     freq_write_batch: int = field(init = False, kw_only = True, default = 5)
     freq_write_report: int = field(init = False, kw_only = True, default = 60)
@@ -29,8 +29,8 @@ class DataCollector(StreamingAgent):
         super().__post_init__()
         self._xstreams = dict[str, str]()
         self._queues: dict[str, asyncio.Queue] = {
-            Tick: asyncio.Queue(maxsize = self.maxlen),
-            Candle: asyncio.Queue(maxsize = self.maxlen)}
+            Tick: asyncio.Queue(maxsize = self.maxlen_local),
+            Candle: asyncio.Queue(maxsize = self.maxlen_local)}
         self._crons[self.scan] = Timedelta(seconds = self.freq_scan)
         self._crons[self.write_batch] = Timedelta(seconds = self.freq_write_batch)
         self._crons[self.write_report] = Timedelta(seconds = self.freq_write_report)

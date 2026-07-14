@@ -60,7 +60,7 @@ class Balance(BasePoint):
     balance: float = field(kw_only = True)
     equity: float = field(kw_only = True, default = None)
     margin: float = field(kw_only = True, default = None)
-    STREAM_KEY: ClassVar[str] = "{venue}|{account_id}|{symbol}"
+    STREAM_KEY: ClassVar[str] = "{venue}|{account_id}|{symbol}|{tf}"
     INDEX_KEYS: ClassVar[list[str]] = ["venue", "account_id", "symbol", "time"]
     BASIC_KEYS: ClassVar[list[str]] = ["balance", "equity", "margin"]
     CACHE_KEYS: ClassVar[list[str]] = [*BASIC_KEYS, "uPNL", "uPRC", "mPRC", "dus"]
@@ -92,8 +92,7 @@ class Balance(BasePoint):
     @property#█▄▄▄▄▄▄▄
     def __dict__(self):
         stream_key = self.STREAM_KEY.format(
-          venue = self.account.venue, account_id = self.account.id,
-          symbol = "$" if self.symbol is None else self.symbol.symbol)
+          venue = self.account.venue, account_id = self.account.id)
         payload = {key: getattr(self, key) for key in self.CACHE_KEYS}
         return {"stream": stream_key, "time": self.time_us, "payload": payload}
 

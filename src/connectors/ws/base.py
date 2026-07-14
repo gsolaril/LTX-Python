@@ -4,15 +4,15 @@ from typing import Any, Callable, ClassVar
 from pandas import Timestamp, Timedelta
 from aiohttp import WSMsgType, ClientSession
 from aiohttp import ClientWebSocketResponse
-from src.connectors.base import Venue, Stream, Connector
+from src.connectors.base import Venue, Channel, Connector
 from src.connectors.base import DataConnector, ExecConnector 
 from src.models import *
 from src.utils import *
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class StreamWS(Stream):
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class ChannelWS(Channel):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, name: str, on_message: Callable,
           url_args: Callable, on_ping: Callable = None):
@@ -39,19 +39,19 @@ class StreamWS(Stream):
                 self._subs.clear()
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def stream(self, src: Connector):
+    async def listen(self, src: Connector):
 
-        stream_name = f"{src.name}/{self.name}"
+        conn_name = f"{src.name}/{self.name}"
         async with ClientSession() as session:
             while src.active:
                 try:
                     args = await self.url_args()
-                    Log.info(self.VERBOSE_RECONN.format(stream_name, args["url"]))
+                    Log.info(self.VERBOSE_RECONN.format(conn_name, args["url"]))
                     async with session.ws_connect(**args, heartbeat = 30) as WS:
                         self._WS = WS ; self._WS_connected.set()
-                        src._sockets[stream_name] = self._WS
+                        src._sockets[conn_name] = self._WS
                         await self._subs_known.wait()
-                        Log.info(self.VERBOSE_CONNED.format(stream_name))
+                        Log.info(self.VERBOSE_CONNED.format(conn_name))
                         async for message in self._WS:
                             if (message.type == WSMsgType.TEXT):
                                 try:
@@ -61,16 +61,16 @@ class StreamWS(Stream):
                                     text = str(message.data)
                                     if (text.lower() == "pong"): pass
                                     elif (text.lower() == "ping"): await self.send_ping(False)
-                                    else: Log.warning(self.VERBOSE_NOJSON.format(stream_name, text))
+                                    else: Log.warning(self.VERBOSE_NOJSON.format(conn_name, text))
                             elif (message.type == WSMsgType.PING): await self._WS.pong(message.data)
                             elif (message.type == WSMsgType.ERROR): raise self._WS.exception()
                             elif (message.type in {WSMsgType.CLOSED, WSMsgType.CLOSING}):
-                                Log.warning(self.VERBOSE_CLOSED.format(stream_name))
+                                Log.warning(self.VERBOSE_CLOSED.format(conn_name))
                             else:
-                                Log.warning(self.VERBOSE_WDTYPE.format(stream_name, message.type))
+                                Log.warning(self.VERBOSE_WDTYPE.format(conn_name, message.type))
 
                 except Exception as EXC:
-                    Log.exception(self.VERBOSE_ERROR.format(stream_name), EXC)
+                    Log.exception(self.VERBOSE_ERROR.format(conn_name), EXC)
                     self._subs.clear(); self._WS = None
                     self._WS_connected.clear()
                     self._subs_known.clear()
@@ -81,18 +81,18 @@ class StreamWS(Stream):
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataConnectorWS(DataConnector):
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __init__(self, **streams):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, **datafeeds):
         super().__init__()
-        stream: DataStreamWS
-        for stream in streams.values():
-            self._subs_new[stream.name] = set[set]()
-            self._subs_old[stream.name] = set[set]()
-            self._streams[f"{stream.name}/stream"] = stream.stream
-            self._streams[f"{stream.name}/update"] = stream.update
+        datafeed: DataChannelWS
+        for datafeed in datafeeds.values():
+            self._sources_new[datafeed.name] = set[set]()
+            self._sources_old[datafeed.name] = set[set]()
+            self._procs[f"{datafeed.name}/stream"] = datafeed.listen
+            self._procs[f"{datafeed.name}/update"] = datafeed.update
 
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class DataStreamWS(StreamWS):
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class DataChannelWS(ChannelWS):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, name: str, on_message: Callable, url_args: Callable, 
                        on_ping: Callable = None, get_subs: Callable = None):
@@ -103,18 +103,18 @@ class DataStreamWS(StreamWS):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update(self, src: DataConnector):
         
-        stream_name = f"{src.name}/{self.name}"
-        Log.warning(f"WS for \"{stream_name}\" channel loop started.")
+        conn_name = f"{src.name}/{self.name}"
+        Log.warning(f"WS for \"{conn_name}\" update loop started.")
         while src.active:
             await src._WS_to_resub.wait()
             await self._WS_connected.wait()
             if self._subs: await self.send_ping(True)
 
             subs_new = set()
-            if (subs := src._subs_new[self.name]):
+            if (subs := src._sources_new[self.name]):
                 subs_new, payload_new = self.get_subs(subs, True)
             subs_old = set()
-            if (subs := src._subs_old[self.name]):
+            if (subs := src._sources_old[self.name]):
                 subs_old, payload_old = self.get_subs(subs, False)
 
             if (self._WS is None) or self._WS.closed:
@@ -127,22 +127,22 @@ class DataStreamWS(StreamWS):
                     for payload in payload_new:
                         await self._WS.send_json(payload)
                     self._subs = self._subs | subs_new
-                    src._subs_new[self.name].clear()
+                    src._sources_new[self.name].clear()
                     src._WS_to_resub.clear()
                     self._subs_known.set()
                 if subs_old:
                     for payload in payload_old:
                         await self._WS.send_json(payload)
                     self._subs = self._subs - subs_old
-                    src._subs_old[self.name].clear()
+                    src._sources_old[self.name].clear()
                     src._WS_to_resub.clear()
             except Exception as EXC:
-                Log.exception(self.VERBOSE_NOCONN.format(stream_name, "sub"), EXC)
+                Log.exception(self.VERBOSE_NOCONN.format(conn_name, "sub"), EXC)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class ExecStreamWS(StreamWS):
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class ExecChannelWS(ChannelWS):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, name: str, on_message: Callable, url_args: dict,
                   on_ping: Callable = None, get_subs: Callable = None):
@@ -162,33 +162,30 @@ class ExecConnectorWS(ExecConnector):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, *creds):
         super().__init__()
-        stream: ExecStreamWS
+        channel: ExecChannelWS
         cred: Venue.Credentials = None
-        self._streams = dict[str, ExecStreamWS]()
+        self._procs = dict[str, Callable]()
         self._sockets = dict[str, ClientWebSocketResponse]()
         Credentials = getattr(self.__class__, "Credentials",
             Venue.Credentials)
         for cred in creds:
             name_gen = f"{self.name}/{{channel}}/{cred.aid}"
             if not isinstance(cred, Credentials): continue
-            stream = ExecStreamWS(name := name_gen.format(channel := "account"), 
+            channel = ExecChannelWS(name := name_gen.format(channel := "account"), 
                 on_message = self.on_message, get_subs = self.get_subs(cred, channel),
                   on_ping = self.on_ping, url_args = self.get_url_args(cred, channel))
-            self._streams[name] = stream.stream
-            stream = ExecStreamWS(name := name_gen.format(channel := "exec"),
+            self._procs[name] = channel.listen
+            channel = ExecChannelWS(name := name_gen.format(channel := "exec"),
                 on_message = self.on_message, get_subs = self.get_subs(cred, channel),
                   on_ping = self.on_ping, url_args = self.get_url_args(cred, channel))
-            self._streams[name] = stream.stream
-            self._sockets[cred.aid] = stream._WS
+            self._procs[name] = channel.listen
+            self._sockets[cred.aid] = channel._WS
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def get_url_args(self, cred: Venue.Credentials, channel: str): ...
     def get_subs(self, cred: Venue.Credentials, channel: str): ...
     async def on_ping(self, sender: bool = False): ...
     async def on_message(self, message: Any): ...
-    async def create_order(self, aid: str, order: Order): ...
-    async def cancel_order(self, aid: str, order_id: str): ...
-    async def modify_order(self, aid: str, order_id: str, order: Order): ...
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def sender(self, aid: str, payload: dict):
         if (WS := self._sockets[aid]) is None: return

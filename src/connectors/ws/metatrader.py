@@ -6,8 +6,8 @@ from urllib.parse import urlencode
 from aiohttp import ClientSession
 from aiohttp import ClientWebSocketResponse
 from typing import Any, List, Dict, ClassVar
-from .base import DataConnectorWS, DataStreamWS
-from .base import ExecConnectorWS, ExecStreamWS
+from .base import DataConnectorWS, DataConnectorWS
+from .base import ExecConnectorWS, ExecConnectorWS
 from src.connectors.base import Venue
 from src.models import *
 from src.utils import *

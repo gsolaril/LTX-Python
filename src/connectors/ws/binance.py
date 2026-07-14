@@ -5,8 +5,8 @@ from urllib.parse import urlencode
 from aiohttp import ClientSession
 from aiohttp import ClientWebSocketResponse
 from typing import Any, List, Dict, ClassVar
-from .base import DataConnectorWS, DataStreamWS
-from .base import ExecConnectorWS, ExecStreamWS
+from .base import DataConnectorWS, DataConnectorWS
+from .base import ExecConnectorWS, ExecConnectorWS
 from src.connectors.base import Venue
 from src.models import *
 from src.utils import *
@@ -17,6 +17,7 @@ from src.utils import *
 class Binance(Venue):
 
     STATUS = {"NEW": "OK", "FILLED": "OK", "CANCELED": "OK", "PARTIALLY_FILLED": "OK"}
+    URL_WS: ClassVar[str] = ...
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class Credentials(Venue.Credentials): api_key: str; secret: str
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -38,7 +39,7 @@ class Binance(Venue):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def to_create_payload(cls, order: Order):
+    def to_create_payload(cls, order: StopOrder):
         payload = {
             "symbol": cls.symbol_to_venue(order.symbol),
             "side": order.side, "type": order.type,
@@ -50,7 +51,7 @@ class Binance(Venue):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def to_modify_payload(cls, order: Order, order_id: str):
+    def to_modify_payload(cls, order: StopOrder, order_id: str):
         payload = {
             "symbol": cls.symbol_to_venue(order.symbol),
             "side": order.side, "orderId": order_id,
@@ -82,9 +83,8 @@ class Binance(Venue):
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataBinance(DataConnectorWS, Binance):
 
-    URL_WS: ClassVar[str] = ...
-    STREAM_PATH_TICK: ClassVar[str] = ...
-    STREAM_PATH_KLINE: ClassVar[str] = ...
+    FEED_PATH_TICK: ClassVar[str] = ...
+    FEED_PATH_KLINE: ClassVar[str] = ...
     CHANNEL_KEY_TICK: ClassVar[str] = ...
     CHANNEL_KEY_KLINE: ClassVar[str] = ...
     SYMBOL_KEY_KLINE: ClassVar[str] = "ps"
@@ -92,10 +92,10 @@ class DataBinance(DataConnectorWS, Binance):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self): super().__init__(
-        ticks = DataStreamWS(name = "ticks",
+        ticks = DataConnectorWS(name = "ticks",
             get_subs = self.get_subs_ticks, on_message = self.on_ticks,
             on_ping = self.on_ping, url_args = self.get_url_headers_ticks),
-        klines = DataStreamWS(name = "klines",
+        klines = DataConnectorWS(name = "klines",
             get_subs = self.get_subs_klines, on_message = self.on_klines,
             on_ping = self.on_ping, url_args = self.get_url_headers_klines))
 
@@ -110,12 +110,12 @@ class DataBinance(DataConnectorWS, Binance):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def get_urlh(self, path: str):
-        base = self.url or type(self).URL_WS
+        base = self.URL_WS or type(self).URL_WS
         if not base: raise ValueError(
             f"{self.name}: websocket url not configured")
         return {"url": base.rstrip("/") + "/" + path.lstrip("/")} 
-    async def get_url_headers_ticks(self): return await self.get_urlh(self.STREAM_PATH_TICK)
-    async def get_url_headers_klines(self): return await self.get_urlh(self.STREAM_PATH_KLINE)
+    async def get_url_headers_ticks(self): return await self.get_urlh(self.FEED_PATH_TICK)
+    async def get_url_headers_klines(self): return await self.get_urlh(self.FEED_PATH_KLINE)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def get_subs(self, symbols: set, is_sub: bool, key: str):
@@ -133,8 +133,8 @@ class DataBinance(DataConnectorWS, Binance):
     async def on_ping(self, WS: ClientWebSocketResponse, sender: bool = False):
         if not sender: return await WS.send_str("pong")
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Redis.stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_ticks(self, data: Dict):
         if (data := data.get("data", None)) is None: return
         event = data.get("e", None)
@@ -152,8 +152,8 @@ class DataBinance(DataConnectorWS, Binance):
         self._bundle.on_tick(tick)
         yield tick
         
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Redis.stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_klines(self, data: Dict):
         if (data := data.get("data", None)) is None: return
         if (event := data.get("e", None)) is None: return
@@ -183,8 +183,8 @@ class DataBinance(DataConnectorWS, Binance):
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class ExecBinance(ExecConnectorWS, Binance):
 
-    STREAM_PATH_ACCOUNT: ClassVar[str] = ...
-    STREAM_PATH_EXEC: ClassVar[str] = ...
+    FEED_PATH_ACCOUNT: ClassVar[str] = ...
+    FEED_PATH_EXEC: ClassVar[str] = ...
     CHANNEL_KEY_ACCOUNT: ClassVar[str] = ...
     CHANNEL_KEY_EXEC: ClassVar[str] = ...
 
@@ -200,12 +200,12 @@ class ExecBinance(ExecConnectorWS, Binance):
     async def on_ping(self, WS: ClientWebSocketResponse, sender: bool = False):
         if not sender: return await WS.send_str("pong")
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Redis.stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_message(self, message: Dict):
         # TODO: implement for Binance based on Binance API docs
         yield Balance(...)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def create_order(self, aid: str, order: Order):
+    async def create_order(self, aid: str, order: StopOrder):
         # TODO: implement for Binance based on Binance API docs
         self.sender(aid, ...)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -213,7 +213,7 @@ class ExecBinance(ExecConnectorWS, Binance):
         # TODO: implement for Binance based on Binance API docs
         self.sender(aid, ...)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def modify_order(self, aid: str, order_id: str, order: Order):
+    async def modify_order(self, aid: str, order_id: str, order: StopOrder):
         # TODO: implement for Binance based on Binance API docs
         self.sender(aid, ...)
 
@@ -230,9 +230,10 @@ class BinanceCoin(Binance):
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataBinanceCoin(DataBinance, BinanceCoin):
-    URL_WS: ClassVar[str] = "wss://dstream.binance.com"
-    STREAM_PATH_TICK: ClassVar[str] = "public/stream"
-    STREAM_PATH_KLINE: ClassVar[str] = "market/stream"
+    URL_WS: ClassVar[str] = "wss://dstream.binance.com" \
+        if Config.TEST else "wss://dstream.binance.com"
+    FEED_PATH_TICK: ClassVar[str] = "public/stream"
+    FEED_PATH_KLINE: ClassVar[str] = "market/stream"
     CHANNEL_KEY_TICK: ClassVar[str] = "@bookTicker"
     CHANNEL_KEY_KLINE: ClassVar[str] = "@continuousKline_1s"
     SYMBOL_KEY_KLINE: ClassVar[str] = "ps"
@@ -251,9 +252,10 @@ class BinanceSpot(Binance):
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataBinanceSpot(DataBinance, BinanceSpot):
-    URL_WS: ClassVar[str] = "wss://stream.binance.com:9443"
-    STREAM_PATH_TICK: ClassVar[str] = "stream"
-    STREAM_PATH_KLINE: ClassVar[str] = "stream"
+    URL_WS: ClassVar[str] = "wss://stream.binance.com:9443" \
+        if Config.TEST else "wss://stream.binance.com:9443"
+    FEED_PATH_TICK: ClassVar[str] = "stream"
+    FEED_PATH_KLINE: ClassVar[str] = "stream"
     CHANNEL_KEY_TICK: ClassVar[str] = "@bookTicker"
     CHANNEL_KEY_KLINE: ClassVar[str] = "@kline_1s"
     SYMBOL_KEY_KLINE: ClassVar[str] = "s"
@@ -272,9 +274,10 @@ class BinanceUsdm(Binance):
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataBinanceUsdm(DataBinance, BinanceUsdm):
-    URL_WS: ClassVar[str] = "wss://fstream.binance.com"
-    STREAM_PATH_TICK: ClassVar[str] = "public/stream"
-    STREAM_PATH_KLINE: ClassVar[str] = "market/stream"
+    URL_WS: ClassVar[str] = "wss://fstream.binance.com" \
+        if Config.TEST else "wss://fstream.binance.com"
+    FEED_PATH_TICK: ClassVar[str] = "public/stream"
+    FEED_PATH_KLINE: ClassVar[str] = "market/stream"
     CHANNEL_KEY_TICK: ClassVar[str] = "@bookTicker"
     CHANNEL_KEY_KLINE: ClassVar[str] = "_perpetual@continuousKline_1s"
     SYMBOL_KEY_KLINE: ClassVar[str] = "ps"

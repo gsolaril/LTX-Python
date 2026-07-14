@@ -13,8 +13,6 @@ from src.utils import Postgres, Redis, TZ
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄
 class BaseAgent:
-    url: str = field(init = False, kw_only = True, default = None)
-    maxlen: int = field(init = False, kw_only = True, default = 10000)
     debug: bool = field(init = False, kw_only = True, default = False)
     active: bool = field(init = False, kw_only = True, default = False)
     last_written: Timestamp = field(init = False, kw_only = True, default = None)
@@ -25,9 +23,9 @@ class BaseAgent:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         self.name = self.__class__.__name__
-        self._specs = OrderedDict[str, Symbol]()
-        self._crons = dict[Callable, Timedelta]()
-        self._tasks = dict[str, asyncio.Task]()
+        self._tasks = dict[str, asyncio.Task]()    # All coroutines holding sync, async and client-related processes.
+        self._crons = dict[Callable, Timedelta]()  # Sync/Cron processes, that run at a given frequency; every N secs/mins/hs
+        self._procs = dict[str, Callable]()        # Async processes (e.g.: Channel methods) that work on the background.
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def start_cron(self, cron: Callable):
@@ -90,11 +88,12 @@ class BaseAgent:
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class StreamingAgent(BaseAgent):
+    maxlen_redis: int = field(init = False, kw_only = True, default = 10000)
     freq_redis_report: int = field(init = False, kw_only = True, default = 600)
     STREAM_PREFIX: ClassVar[str] = ...
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def setup(self):
-        tasks =  list[asyncio.Task]()
+        tasks = list[asyncio.Task]()
         tasks.append(asyncio.create_task(Redis(self),
                 name = f"{self.name}/Manager/Redis"))
         await Redis.wait()

@@ -5,7 +5,7 @@ from urllib.parse import urlencode
 from aiohttp import ClientSession
 from aiohttp import ClientWebSocketResponse
 from typing import Any, List, Dict, ClassVar
-from .base import DataConnectorWS, DataStreamWS
+from .base import DataConnectorWS, DataChannelWS
 from src.connectors.rest import Polymarket
 from src.models import *
 from src.utils import *
@@ -14,16 +14,18 @@ from src.utils import *
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataPolymarket(DataConnectorWS, Polymarket):
+
+    URL_WS: ClassVar[str] = "wss://ws-subscriptions-clob.polymarket.com"
     
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self): super().__init__(
-        ticks = DataStreamWS(name = "ticks",
+        ticks = DataChannelWS(name = "ticks",
             get_subs = self.get_subs, on_message = self.on_ticks,
             on_ping = self.on_ping, url_args = self.get_url_headers),
     )
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
-        self._crons[self.Event.shift_keys] = Timedelta(seconds = self.Event.UPD_FREQ)
+        self._crons[self.Event.shift_keys] = Timedelta(seconds = self.Event.MIN_UPD_FREQ)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def get_url_headers(self, path: str):
@@ -42,8 +44,8 @@ class DataPolymarket(DataConnectorWS, Polymarket):
         if sender and (now % 10 == 0):
             return await WS.send_str("PING")
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Redis.stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_ticks(self, data: Dict):
 
         template = [{"price": 0.0, "size": 0.0}]

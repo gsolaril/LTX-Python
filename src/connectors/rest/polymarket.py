@@ -5,7 +5,8 @@ from aiohttp import ClientSession
 from dataclasses import dataclass, field
 from typing import Any, List, Dict, ClassVar
 from pandas import Series, Timedelta, Timestamp
-from src.connectors.base import Venue, DataConnector
+from src.connectors.base import Venue, ExecConnector
+from polymarket import AsyncSecureClient, RelayerApiKey
 from src.models import *
 from src.utils import *
 
@@ -21,6 +22,7 @@ class Polymarket(Venue):
     ARROWS_FROM_SIGN = {+1: "↑", -1: "↓"}
     ARROWS_FROM_CHAR = {"U": "↑", "D": "↓"}
     STATUS = {"live": "OK", "matched": "OK"}
+    URL_GAMMA = "https://gamma-api.polymarket.com"
     
     #▄▄▄▄▄▄▄▄▄▄▄
     @dataclass#█▄▄▄▄▄▄▄▄▄▄
@@ -28,7 +30,7 @@ class Polymarket(Venue):
         index: str = field(kw_only = True, default = "IDS")
         STREAM_KEY: ClassVar[str] = "Polymarket|GAMMA"
         MAP: ClassVar[bidict[str, str]] = bidict()
-        UPD_FREQ: ClassVar[int] = 300
+        MIN_UPD_FREQ: ClassVar[int] = 300
         #▄▄▄▄▄▄▄▄▄▄
         @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def __dict__(self): return {"stream": self.STREAM_KEY,
@@ -36,14 +38,16 @@ class Polymarket(Venue):
         #▄▄▄▄▄▄▄▄▄▄▄▄▄
         @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def shift_keys(cls, shift: int = 1):
+            start_at = time.time()
             new_map: bidict[str, str] = bidict()
             for old_symbol, id in cls.MAP.items():
                 key, old_shift = old_symbol.split("+")
                 new_shift = int(old_shift) - shift
                 if (new_shift < 0): continue
-                new_symbol = f"{key}+{new_shift}"
-                new_map[new_symbol] = id
+                new_map[f"{key}+{new_shift}"] = id
             cls.MAP = new_map
+            delay = (time.time() - start_at) * 1e6
+            Log.info(f"Keys shifted by {shift}... delay: {delay:.0f} μs...")
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -90,11 +94,11 @@ class Polymarket(Venue):
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class PolymarketGamma(DataConnector, Polymarket):
-    VENUE: ClassVar[str] = Polymarket.VENUE
+@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class ExecPolymarket(ExecConnector, Polymarket):
     freq_redis_report: int = field(kw_only = True,
-            default = Polymarket.Event.UPD_FREQ)
+        default = Polymarket.Event.MIN_UPD_FREQ)
+    VENUE: ClassVar[str] = Polymarket.VENUE
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
@@ -132,16 +136,16 @@ class PolymarketGamma(DataConnector, Polymarket):
     async def _find_event(self, session: ClientSession,
             symbol: str, tf: TimeFrame, shift: int = 0):
         ts = Timestamp.now("UTC") + shift * tf.value
-        args = {"url": self.url + "/events", "params": {
-            "slug": self.slug(symbol, tf, ts)}}
+        args = {"url": self.URL_GAMMA.rstrip("/") + "/events",
+                "params": {"slug": self.slug(symbol, tf, ts)}}
         async with session.get(**args) as resp:
             if (resp.status != 200): return
             try: ids = await resp.json()
             except Exception as EXC: return Log.exception(EXC)
             if isinstance(ids, list) and len(ids): return ids[0]
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Redis.on_stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Redis.stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update_ids(self, shifts: int = 3):
         time_event = Timestamp.now("UTC")
         verbose, pending = dict(), dict()
@@ -181,11 +185,13 @@ class PolymarketGamma(DataConnector, Polymarket):
         await self._reconfig(conn)
         self._crons[self.reconfig] = Timedelta(
               seconds = self.freq_redis_report)
+        await self.update_specs(conn, Polymarket.VENUE)
         await conn.close()
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Postgres.on_table(DataConnector.TABLE_CONFIG)
+    @Postgres.on_table(ExecConnector.TABLE_CONFIG)
     async def _reconfig(self, conn: asyncpg.Connection):
+        self.Event.shift_keys(shift = 1)
         await super().reconfig(conn, Polymarket.VENUE)
         query_id, query_exp = list[str](), list[str]()
         condition = "WHEN (symbol = '{0}') THEN '{1}'"
@@ -209,3 +215,71 @@ class PolymarketGamma(DataConnector, Polymarket):
         query_lines = [line_upper, *query_id, *query_exp, line_lower]
         n = (await conn.execute(str.join("\n", query_lines))).split(" ")[-1]
         Log.info(f"Updated {n} Polymarket IDs in \"{self.TABLE_SYMBOLS}\"")
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def sender(self, payload: dict, account_id: str, action: str):
+        client: AsyncSecureClient = self._clients.get(account_id, None)
+        try: 
+            response = None
+            assert client is not None
+            if (action == "create"):
+                response = await client.place_limit_order(
+                    side = payload["side"], price = payload["price"],
+                    token_id = payload["id"], size = payload["size"])
+                return response.model_dump()
+            elif (action == "delete"):
+                response = await client.cancel_order(order_id = payload["id"])
+                return response.model_dump()
+            else: raise ValueError(f"{action!r} not implemented")
+        except Exception as EXC:
+            raise ExecConnector.Reject(self.VERBOSE_EXEC.format(
+                action, "error", f"\n => {payload!r}\n => {EXC!r}"))
+        
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def create_order(self, request: Order):
+
+        payload = {}
+
+        response = await self.sender(action = "create",
+          account_id = request.account.id, payload = {
+            "size": str(int(abs(request.size) * 100)),
+            "id": self.Event.MAP[request.symbol],
+            "side": request.side.name.upper(),
+            "price": str(request.price)})
+
+        status = self.status_to_local(response)
+        response["status"] = status
+        response["size"] = float(response.pop("making_amount"))
+        EID = response.pop("order_id", None)
+        response["EID"] = EID
+
+        response = Response(request, **response)
+        args = {"action": "create", "result": "OK"}
+
+        if (EID is not None): self._uid_to_eid[response.UID] = EID
+
+        ok = (status == "OK")
+        if not ok: args["result"] = "error"
+        log = Log.success if ok else Log.error
+        verbose = self.VERBOSE_EXEC.format(**args)
+        log(verbose + f"\n => {response!r}")
+        return response
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def delete_order(self, request: OrderDelete):
+        payload = {"id": self._uid_to_eid[request.UID]}
+        response = await self.sender(action = "delete",
+            account_id = request.account.id, payload = payload)
+
+        status = self.status_to_local(response)
+        response["status"] = status
+        
+        response = Response(request, **response)
+        args = {"action": "delete", "result": "OK"}
+
+        ok = (status == "OK")
+        if not ok: args["result"] = "error" 
+        log = Log.success if ok else Log.error
+        verbose = self.VERBOSE_EXEC.format(**args)
+        log(verbose + f"\n => {response!r}")
+        return response

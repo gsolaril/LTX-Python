@@ -19,6 +19,7 @@ STARTUP_ERRORS = list()
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class Config(NamedTuple):
     USER: str = getuser()
+    TEST: bool = False
     SESSION_NAME: str = __name__
     LOG_TO_FILE: bool = True
     LOG_TO_LDB: bool = False

@@ -6,7 +6,7 @@ connectors_agents = {
     "connectors/binanceusdm": DataBinanceUsdm,
     "connectors/binancecoin": DataBinanceCoin,
     "connectors/binancespot": DataBinanceSpot,
-    "connectors/polymarketgamma": PolymarketGamma
+    "connectors/polymarketgamma": ExecPolymarket
 }
 __all__ = ["connectors_agents"]
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

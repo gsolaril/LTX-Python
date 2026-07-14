@@ -58,8 +58,8 @@ class PostgresManager:
         self._queue.put_nowait(payload)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def __call__(self, src: Any):
+        self._queue = Queue(maxsize = 10)
         conn = await self._client.acquire()
-        self._queue = Queue(maxsize = src.maxlen)
         verbose = "Postgres listeners started:"
         for func in self._to_listen.values():
             await func(src, conn)
@@ -185,8 +185,8 @@ class RedisManager:
         self._reporter.close_batch()
         report = self._reporter.to_string(next_at)
         if report: Log.info("Redis' " + report)
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def on_stream(self, func: Callable = None):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def stream(self, func: Callable = None):
         def decorator(func: Callable):
             @functools.wraps(func)
             async def wrapped(*args, **kwargs):
@@ -203,7 +203,7 @@ class RedisManager:
         return decorator(func)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def __call__(self, src: Any):
-        self._queue = Queue(maxsize = src.maxlen,
+        self._queue = Queue(maxsize = src.maxlen_redis,
             checkpoints = self.CHECKPOINTS.copy())
         while self._pending:
             self._queue.put_nowait(self._pending.popleft())
@@ -219,7 +219,7 @@ class RedisManager:
                     stream = str.join("|", [self.STREAM_PREFIX, src.STREAM_PREFIX, suffix])
                     if stream not in self._streams: await self.add_streams([suffix], src)
                     payload["dus2"] = int(time.time() * 1e6 - time_event)
-                    assert (await self._client.xadd(stream, payload, id, src.maxlen))
+                    assert (await self._client.xadd(stream, payload, id, src.maxlen_redis))
                     if src.debug: Log.debug(self.VERBOSE_XADD.format(N, stream, id, payload))
                     self._reporter.add(suffix)
                 except Exception as EXC:
