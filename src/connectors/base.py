@@ -110,7 +110,8 @@ class Connector(ControllableAgent):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def get_stream_names(self, streams: set[str]): ...
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Postgres.on_table(TABLE_CONFIG)#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def reconfig(self, conn: asyncpg.Connection,
               venue: str = None, sources: set = None):
         await super().reconfig(conn)

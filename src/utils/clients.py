@@ -47,8 +47,8 @@ class PostgresManager:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, creds: Credentials = None):
         client = EventLoop.run_until_complete(self._create(creds))
+        self._decorated = dict[str, dict]()
         self._client: asyncpg.Pool = client
-        self._to_listen = dict[str, Callable]()
         self._ready = asyncio.Event()
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def wait(self):
@@ -56,25 +56,6 @@ class PostgresManager:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def _queue_handler(self, _conn, _pid, _channel, payload):
         self._queue.put_nowait(payload)
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def __call__(self, src: Any):
-        self._queue = Queue(maxsize = 10)
-        conn = await self._client.acquire()
-        verbose = "Postgres listeners started:"
-        for func in self._to_listen.values():
-            await func(src, conn)
-        for table, func in self._to_listen.items():
-            await conn.execute(self._QUERY.format(table))
-            await conn.add_listener(table, self._queue_handler)
-            verbose += f"\n => \"{table}\": \"{func.__name__}\""
-        Log.success(verbose)
-        self._ready.set()
-        while True:
-            try:
-                table = json.loads(await self._queue.get())["table"]
-                if (func := self._to_listen.get(table)) is None: continue
-                async with self._client.acquire() as conn: await func(src, conn)
-            except Exception as EXC: Log.exception(EXC); return conn.close()
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_table(self, table: Table):
         def noop(func: Callable): return func
@@ -82,10 +63,43 @@ class PostgresManager:
             @functools.wraps(func)
             async def wrapped(*args, **kwargs):
                 return await func(*args, **kwargs)
-            self._to_listen[table.value] = wrapped
+            src = func.__qualname__.rsplit(".", 1)[0]
+            if src not in self._decorated:
+                self._decorated[src] = dict()
+            self._decorated[src][table.value] = wrapped
             return wrapped
         if not isinstance(table, self.Table): return noop
         else: return decorator
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def _get_listeners(self, src: Any):
+        listeners = dict[str, Callable]()
+        mro = {C.__name__ for C in type(src).mro()}
+        dump = set(self._decorated).difference(mro)
+        for src_name in dump: self._decorated.pop(src_name)
+        for src_name, table_dict in self._decorated.items():
+            for table, func in table_dict.items():
+                listeners[table] = func
+        return listeners
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def __call__(self, src: Any):
+        self._queue = Queue(maxsize = 10)
+        conn = await self._client.acquire()
+        listeners = self._get_listeners(src)
+        verbose = "Postgres listeners started:"
+        for func in listeners.values():
+            await func(src, conn)
+        for table, func in listeners.items():
+            await conn.execute(self._QUERY.format(table))
+            await conn.add_listener(table, self._queue_handler)
+            verbose += f"\n => \"{table}\": \"{func.__qualname__}\""
+        Log.success(verbose)
+        self._ready.set()
+        while True:
+            try:
+                table = json.loads(await self._queue.get())["table"]
+                if (func := listeners.get(table)) is None: continue
+                async with self._client.acquire() as conn: await func(src, conn)
+            except Exception as EXC: Log.exception(EXC); return conn.close()
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  

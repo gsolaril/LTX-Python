@@ -127,8 +127,9 @@ class ControllableAgent(StreamingAgent):
         await Postgres.wait()
         tasks.extend(await super().setup())
         return tasks
-
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Postgres.on_table(TABLE_CONFIG)#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def reconfig(self, conn: asyncpg.Connection):
         await self.update_config(conn)
         if ("freq_redis_report" in self.FIELDS):

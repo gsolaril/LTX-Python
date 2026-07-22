@@ -117,6 +117,7 @@ class DataChannelWS(ChannelWS):
             if (subs := src._sources_old[self.name]):
                 subs_old, payload_old = self.get_subs(subs, False)
 
+            src._WS_to_resub.clear()
             if (self._WS is None) or self._WS.closed:
                 self._subs.clear(); continue
             if (not subs_old) and (not subs_new): continue
@@ -128,14 +129,12 @@ class DataChannelWS(ChannelWS):
                         await self._WS.send_json(payload)
                     self._subs = self._subs | subs_new
                     src._sources_new[self.name].clear()
-                    src._WS_to_resub.clear()
                     self._subs_known.set()
                 if subs_old:
                     for payload in payload_old:
                         await self._WS.send_json(payload)
                     self._subs = self._subs - subs_old
                     src._sources_old[self.name].clear()
-                    src._WS_to_resub.clear()
             except Exception as EXC:
                 Log.exception(self.VERBOSE_NOCONN.format(conn_name, "sub"), EXC)
 

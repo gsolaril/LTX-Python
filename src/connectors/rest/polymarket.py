@@ -191,7 +191,7 @@ class ExecPolymarket(ExecConnector, Polymarket):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Postgres.on_table(ExecConnector.TABLE_CONFIG)
     async def _reconfig(self, conn: asyncpg.Connection):
-        self.Event.shift_keys(shift = 1)
+        Polymarket.Event.shift_keys(shift = 1)
         await super().reconfig(conn, Polymarket.VENUE)
         query_id, query_exp = list[str](), list[str]()
         condition = "WHEN (symbol = '{0}') THEN '{1}'"
@@ -200,7 +200,7 @@ class ExecPolymarket(ExecConnector, Polymarket):
 
         TAB = " " * 4
         [*await self.update_ids()]
-        for symbol, id in self.Event.MAP.items():
+        for symbol, id in Polymarket.Event.MAP.items():
             quote, tf, shift = self.split_symbol(symbol)
             query_id.append(2 * TAB + condition.format(symbol, id))
             exp = Timestamp.now("UTC").ceil(tf.value) + shift * tf.value
@@ -243,7 +243,7 @@ class ExecPolymarket(ExecConnector, Polymarket):
         response = await self.sender(action = "create",
           account_id = request.account.id, payload = {
             "size": str(int(abs(request.size) * 100)),
-            "id": self.Event.MAP[request.symbol],
+            "id": Polymarket.Event.MAP[request.symbol],
             "side": request.side.name.upper(),
             "price": str(request.price)})
 

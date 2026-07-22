@@ -29,7 +29,7 @@ class DataPolymarket(DataConnectorWS, Polymarket):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def get_url_headers(self, path: str):
-        return {"url": self.url.rstrip("/") + "/" + path.lstrip("/")} 
+        return {"url": self.URL_WS.rstrip("/") + "/" + path.lstrip("/")} 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def get_subs(self, symbols: set[str], is_sub: bool):
         payload = {"assets_ids": sorted(symbols), "channels": ["book"], 

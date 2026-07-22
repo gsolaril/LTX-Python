@@ -5,8 +5,8 @@ from urllib.parse import urlencode
 from aiohttp import ClientSession
 from aiohttp import ClientWebSocketResponse
 from typing import Any, List, Dict, ClassVar
-from .base import DataConnectorWS, DataConnectorWS
-from .base import ExecConnectorWS, ExecConnectorWS
+from .base import DataConnectorWS, DataChannelWS
+from .base import ExecConnectorWS, ExecChannelWS
 from src.connectors.base import Venue
 from src.models import *
 from src.utils import *
@@ -39,7 +39,7 @@ class Binance(Venue):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def to_create_payload(cls, order: StopOrder):
+    def to_create_payload(cls, order: Order):
         payload = {
             "symbol": cls.symbol_to_venue(order.symbol),
             "side": order.side, "type": order.type,
@@ -51,7 +51,7 @@ class Binance(Venue):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def to_modify_payload(cls, order: StopOrder, order_id: str):
+    def to_modify_payload(cls, order: Order, order_id: str):
         payload = {
             "symbol": cls.symbol_to_venue(order.symbol),
             "side": order.side, "orderId": order_id,
@@ -92,10 +92,10 @@ class DataBinance(DataConnectorWS, Binance):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self): super().__init__(
-        ticks = DataConnectorWS(name = "ticks",
+        ticks = DataChannelWS(name = "ticks",
             get_subs = self.get_subs_ticks, on_message = self.on_ticks,
             on_ping = self.on_ping, url_args = self.get_url_headers_ticks),
-        klines = DataConnectorWS(name = "klines",
+        klines = DataChannelWS(name = "klines",
             get_subs = self.get_subs_klines, on_message = self.on_klines,
             on_ping = self.on_ping, url_args = self.get_url_headers_klines))
 
@@ -106,7 +106,8 @@ class DataBinance(DataConnectorWS, Binance):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def try_resub(self):
-        self._WS_to_resub.set()
+        self._WS_to_resub.set() # FIXME: Freezes normal flow
+        Log.debug(f"{self.name}: allowing revision of subscriptions")
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def get_urlh(self, path: str):
@@ -205,17 +206,17 @@ class ExecBinance(ExecConnectorWS, Binance):
         # TODO: implement for Binance based on Binance API docs
         yield Balance(...)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def create_order(self, aid: str, order: StopOrder):
+    async def create_order(self, payload: dict):
         # TODO: implement for Binance based on Binance API docs
-        self.sender(aid, ...)
+        self.sender(payload)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def cancel_order(self, aid: str, order_id: str):
+    async def cancel_order(self, payload: dict):
         # TODO: implement for Binance based on Binance API docs
-        self.sender(aid, ...)
+        self.sender(payload)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def modify_order(self, aid: str, order_id: str, order: StopOrder):
+    async def modify_order(self, payload: dict):
         # TODO: implement for Binance based on Binance API docs
-        self.sender(aid, ...)
+        self.sender(payload)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
