@@ -102,16 +102,15 @@ class PostgresManager:
             except Exception as EXC: Log.exception(EXC); return conn.close()
 
 #███████████████████████████████████████████████████████████████████████████████████████████
-#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class RedisManager:
-    PRINT_LIMIT = 50
-    GROUP: list[str] = {"MONITOR": "$", "STRATEGY": "$"}
     VERBOSE_ERROR = "\"{}\" XADD failed:\n => {}"
     VERBOSE_XADD = "[Q{}] \"{}\" XADD @ {} => {}"
     VERBOSE_CP = "Warning: Queue above {0:.0%}."
     STREAM_PREFIX: ClassVar[str] = "LTX"
     VERBOSE_QUEUE = "Queue is {:.0%} full!"
+    PRINT_LIMIT = 50
     CHECKPOINTS = {
         0.5: lambda value: Log.warning("Queue is {:.0%} full!".format(value)),
         0.8: lambda value: Log.warning("Queue is {:.0%} full!".upper().format(value)),
@@ -119,8 +118,10 @@ class RedisManager:
     }
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class Group(enum.StrEnum):
-        MONITOR: str = "$"
-        STRATEGY: str = "$"
+        MONITOR, STRATEGY = "$", "$"
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    class StreamGet(enum.StrEnum):
+        ALL, NEW, LAST = "0-0", ">", "$"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def _create(cls, creds: Credentials = None):

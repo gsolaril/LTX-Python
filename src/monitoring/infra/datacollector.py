@@ -124,7 +124,7 @@ class DataCollector(StreamingAgent):
             tf = str.split(stream, "|")[-1]
             if tf not in suffixes: continue
             if stream not in self._xstreams:
-                self._xstreams[stream] = ">"
+                self._xstreams[stream] = Redis.StreamGet.NEW.value
                 new.add(stream)
         self._scan_ready.set()
         if self._xstreams:

@@ -25,24 +25,45 @@ class DataPolymarket(DataConnectorWS, Polymarket):
     )
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
+        self._xstreams = dict[str, str]()
         self._crons[self.Event.shift_keys] = Timedelta(seconds = self.Event.MIN_UPD_FREQ)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def get_url_headers(self, path: str):
         return {"url": self.URL_WS.rstrip("/") + "/" + path.lstrip("/")} 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def get_subs(self, symbols: set[str], is_sub: bool):
-        payload = {"assets_ids": sorted(symbols), "channels": ["book"], 
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def get_subs(self, subs: set[str], is_sub: bool):
+        subs_current = set(self.Event.MAP.values())
+        if is_sub: subs_due = subs_current.difference(subs)
+        else: subs_due = subs.difference(subs_current)
+        payload = {"assets_ids": sorted(subs_due), "channels": ["book"], 
                   "operation": "SUBSCRIBE" if is_sub else "UNSUBSCRIBE"}
-         # TODO: formulate "subs" as new/old symbols from reconfig...
-         # ...plus those whose event IDs have been updated/outdated.
-        return subs, [payload]
+        return subs_due, [payload]
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_ping(self, WS: ClientWebSocketResponse, sender: bool = False):
-        now = Timestamp.now("UTC").second
-        if sender and (now % 10 == 0):
-            return await WS.send_str("PING")
+        if not sender or (Timestamp.now("UTC").second != 0): return
+        return await WS.send_str("PING")
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update_ids(self):
+        sget_key = Redis.StreamGet.NEW.value
+        keys = Redis.scan("*" + self.Event.STREAM_KEY)
+        self._xstreams = dict.fromkeys(keys, sget_key)
+        if not self._xstreams: return
+        while True:
+            try:
+                response = await Redis.xreadgroup(self,
+                    Redis.Group.MONITOR, self._xstreams)
+                if not response: continue
+                for stream, messages in response:
+                    for message_id, payload in messages:
+                        if not isinstance(payload, dict): continue
+                        self.Event.MAP.update(payload.get("payload", dict()))
+                        await Redis.xack(Redis.Group.MONITOR, stream, message_id)
+                        self._WS_to_resub.set()
+            except asyncio.CancelledError: break
+            except Exception as EXC: Log.exception(EXC); break
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Redis.stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
