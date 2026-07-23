@@ -1,9 +1,9 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import asyncio, asyncpg, json
-from getpass import getpass
+import asyncio, asyncpg
 from bidict import bidict
-from dataclasses import dataclass, field
+from getpass import getpass
 from pandas import Timestamp, Timedelta
+from dataclasses import dataclass, field
 from typing import Any, ClassVar, NamedTuple
 
 from src.models import *
@@ -51,7 +51,7 @@ class Venue:
             assert isinstance(value, str) and (len(value) > 0), \
                 f"\"{aid}\"; invalid \"{key}\": \"{value}\""
             creds_dict[key] = value
-        return cls.Credentials(aid = aid, **creds_dict)
+        return cls.Credentials(aid = 2, **creds_dict)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update_timediff(self): ...

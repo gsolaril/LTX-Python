@@ -1,7 +1,6 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import asyncio, asyncpg, json
+import asyncio, json
 from typing import Any, Callable, ClassVar
-from pandas import Timestamp, Timedelta
 from aiohttp import WSMsgType, ClientSession
 from aiohttp import ClientWebSocketResponse
 from src.connectors.base import Venue, Channel, Connector

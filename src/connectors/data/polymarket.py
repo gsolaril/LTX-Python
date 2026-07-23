@@ -1,12 +1,10 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import asyncio, hmac, hashlib
+import asyncio
+from typing import Any, Dict, ClassVar
 from pandas import Timestamp, Timedelta
-from urllib.parse import urlencode
-from aiohttp import ClientSession
 from aiohttp import ClientWebSocketResponse
-from typing import Any, List, Dict, ClassVar
-from .base import DataConnectorWS, DataChannelWS
-from src.connectors.rest import Polymarket
+from src.connectors.venues import Polymarket
+from src.connectors.ws import DataConnectorWS, DataChannelWS
 from src.models import *
 from src.utils import *
 
