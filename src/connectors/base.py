@@ -51,7 +51,7 @@ class Venue:
             assert isinstance(value, str) and (len(value) > 0), \
                 f"\"{aid}\"; invalid \"{key}\": \"{value}\""
             creds_dict[key] = value
-        return cls.Credentials(aid = 2, **creds_dict)
+        return cls.Credentials(aid = aid, **creds_dict)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update_timediff(self): ...
@@ -114,7 +114,7 @@ class Connector(ControllableAgent):
     @Postgres.on_table(TABLE_CONFIG)#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def reconfig(self, conn: asyncpg.Connection,
               venue: str = None, sources: set = None):
-        await super().reconfig(conn)
+        await super().reconfig(conn, venue)
         if sources is None: sources = self.sources.copy()
         sources_old = self._sources.difference(sources)
         sources_new = sources.difference(self._sources)
@@ -134,9 +134,11 @@ class Connector(ControllableAgent):
         if (venue is None): venue = self.VENUE
         if (symbols is None): symbols = set(self._specs)
         query = f"SELECT * FROM {table} WHERE (venue = '{venue}')"
-        if (len(symbols) > 0): 
-            symbols_str = str.join(", ", [f"'{S}'" for S in symbols])
-            query = query + " AND (symbol IN ({}))".format(symbols_str)
+        if (len(symbols) > 0):
+            if isinstance(symbols, str): clause = f"~ '{symbols}'"
+            else: clause = "IN ({})".format(str.join(", ", [f"'{S}'" for S in symbols]))
+            query += f" AND (symbol {clause})"
+        if self.debug: Log.debug(f"Querying specs:\n => {query}")
         result = [dict(row) for row in await conn.fetch(query)]
         if not result: return Log.error(f"No specs found:\n => {query}")
         for item in result: self._specs[item["symbol"]] = Symbol(**item)
@@ -163,6 +165,7 @@ class DataConnector(Connector):
     async def reconfig(self, conn: asyncpg.Connection,
               venue: str = None, sources: set = None):
         await super().reconfig(conn, venue, sources)
+        print("SOURCES:", self._sources)
         await self.update_specs(conn, venue, self._sources)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████

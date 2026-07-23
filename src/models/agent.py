@@ -129,18 +129,19 @@ class ControllableAgent(StreamingAgent):
         return tasks
     
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Postgres.on_table(TABLE_CONFIG)#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def reconfig(self, conn: asyncpg.Connection):
-        await self.update_config(conn)
+    @Postgres.on_table(TABLE_CONFIG)#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self, conn: asyncpg.Connection, venue: str = None):
+        await self.update_config(conn, venue)
         if ("freq_redis_report" in self.FIELDS):
             freq = self.FREQ_REPORT_DEFAULT
             freq = getattr(self, "freq_redis_report", freq)
             self._crons[Redis.report] = Timedelta(seconds = freq)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_config(self, conn: asyncpg.Connection):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update_config(self, conn: asyncpg.Connection, venue: str = None):
         FIELDS, TABLE = self.FIELDS_STR, self.TABLE_CONFIG
-        query = f"SELECT {FIELDS} FROM {TABLE} WHERE (name = '{self.name}');"
+        if (venue is None): venue = self.name
+        query = f"SELECT {FIELDS} FROM {TABLE} WHERE (name = '{venue}');"
         row = await conn.fetchrow(query)
         if row is None: return Log.error(
             f"No config found for \"{self.name}\":\n => {query}")

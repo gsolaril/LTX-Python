@@ -1,12 +1,13 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import asyncio
+import asyncpg, time
+from bidict import bidict
 from typing import Any, Dict, ClassVar
 from pandas import Timestamp, Timedelta
 from aiohttp import ClientWebSocketResponse
 from src.connectors.venues import Polymarket
-from src.connectors.ws import DataConnectorWS, DataChannelWS
-from src.models import *
-from src.utils import *
+from src.connectors.ws import Connector, DataConnectorWS, DataChannelWS
+from src.models import Tick, Candle, TimeFrame
+from src.utils import Log, Postgres, Redis, TZ
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -19,18 +20,34 @@ class DataPolymarket(DataConnectorWS, Polymarket):
     def __init__(self): super().__init__(
         ticks = DataChannelWS(name = "ticks",
             get_subs = self.get_subs, on_message = self.on_ticks,
-            on_ping = self.on_ping, url_args = self.get_url_headers),
-    )
+            on_ping = self.on_ping, url_args = self.get_url_ticks),
+        )
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
-        self._xstreams = dict[str, str]()
-        name = f"{self.name}/update_ids"
-        self._procs[name] = self.update_ids
-        self._crons[self.Event.shift_keys] = Timedelta(seconds = self.Event.MIN_UPD_FREQ)
+        super().__post_init__()
+        name = f"{self.name}/redis_updater"
+        self._procs[name] = self.Event.redis_updater(self.try_resub)
+        self._crons[self.shift_keys] = Timedelta(seconds = self.Event.MIN_UPD_FREQ)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def get_url_headers(self, path: str):
-        return {"url": self.URL_WS.rstrip("/") + "/" + path.lstrip("/")} 
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def shift_keys(self):
+        start_at = time.time()
+        self.Event.shift_keys()
+        delay = (time.time() - start_at) * 1e6
+        Log.info(f"Keys shifted... delay: {delay:.0f} μs...")
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def try_resub(self, payload: dict):
+        if self.debug: Log.debug(
+            "About to resubscribe to:\n => "
+            + str.join(", ", sorted(payload)))
+        self._WS_to_resub.set()
+    
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Postgres.on_table(DataConnectorWS.TABLE_CONFIG)
+    async def reconfig(self, conn: asyncpg.Connection,
+              venue: str = None, sources: set = None):
+        await Connector.reconfig(self, conn, venue)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def get_subs(self, subs: set[str], is_sub: bool):
         subs_current = set(self.Event.MAP.values())
@@ -40,30 +57,15 @@ class DataPolymarket(DataConnectorWS, Polymarket):
                   "operation": "SUBSCRIBE" if is_sub else "UNSUBSCRIBE"}
         return subs_due, [payload]
 
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def get_url_headers(self, path: str):
+        return {"url": self.URL_WS.rstrip("/") + "/" + path.lstrip("/")}
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def get_url_ticks(self): return self.get_url_headers("ws/market")
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_ping(self, WS: ClientWebSocketResponse, sender: bool = False):
         if not sender or (Timestamp.now("UTC").second != 0): return
         return await WS.send_str("PING")
-
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_ids(self):
-        sget_key = Redis.StreamGet.NEW.value
-        keys = Redis.scan("*" + self.Event.STREAM_KEY)
-        self._xstreams = dict.fromkeys(keys, sget_key)
-        if not self._xstreams: return
-        while True:
-            try:
-                response = await Redis.xreadgroup(self,
-                    Redis.Group.MONITOR, self._xstreams)
-                if not response: continue
-                for stream, messages in response:
-                    for message_id, payload in messages:
-                        if not isinstance(payload, dict): continue
-                        self.Event.MAP.update(payload.get("payload", dict()))
-                        await Redis.xack(Redis.Group.MONITOR, stream, message_id)
-                        self._WS_to_resub.set()
-            except asyncio.CancelledError: break
-            except Exception as EXC: Log.exception(EXC); break
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Redis.stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

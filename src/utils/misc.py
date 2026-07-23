@@ -9,6 +9,7 @@ from .base import TZ
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class Queue(asyncio.Queue):
+    MIN_CHECK = 3
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, maxsize: int, checkpoints: dict[float, Callable] = None):
         if not isinstance(checkpoints, dict): checkpoints = dict[float, Callable]()
@@ -28,6 +29,7 @@ class Queue(asyncio.Queue):
     def get_nowait(self): item = super().get_nowait(); return item
     async def put(self, item: Any): await super().put(item); self._recheck()
     def put_nowait(self, item: Any): super().put_nowait(item); self._recheck()
+    def __len__(self): return self.qsize()
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def _recheck(self):
         self.last_checkpeek += 1 
@@ -43,7 +45,7 @@ class Queue(asyncio.Queue):
             elif (value < value_lower): index_next -= 1
             if (index_next != self.last_checkpoint):
                 func = self._checkfunctions[index_next]
-                if (func is not None): func(value)
+                if (len(self) > self.MIN_CHECK): func(value)
                 self.last_checkpoint = index_next
 
 #███████████████████████████████████████████████████████████████████████████████████████████

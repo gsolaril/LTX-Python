@@ -3,7 +3,7 @@ import asyncio, asyncpg, json, time
 from bidict import bidict
 from aiohttp import ClientSession
 from dataclasses import dataclass, field
-from typing import Any, Dict, ClassVar
+from typing import Any, Dict, ClassVar, Callable
 from pandas import Series, Timedelta, Timestamp
 from src.connectors.base import Venue, Connector
 from src.models import *
@@ -37,7 +37,6 @@ class Polymarket(Venue):
         #▄▄▄▄▄▄▄▄▄▄▄▄▄
         @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def shift_keys(cls, shift: int = 1):
-            start_at = time.time()
             new_map: bidict[str, str] = bidict()
             for old_symbol, id in cls.MAP.items():
                 key, old_shift = old_symbol.split("+")
@@ -45,8 +44,22 @@ class Polymarket(Venue):
                 if (new_shift < 0): continue
                 new_map[f"{key}+{new_shift}"] = id
             cls.MAP = new_map
-            delay = (time.time() - start_at) * 1e6
-            Log.info(f"Keys shifted by {shift}... delay: {delay:.0f} μs...")
+        #▄▄▄▄▄▄▄▄▄▄▄▄▄
+        @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+        def redis_updater(cls, func: Callable = None):
+            async def update(payload: dict):
+                payload.pop("dus2", None)
+                cls.MAP = bidict(payload)
+                await func(payload)
+            async def wrapped(src: Connector):
+                key_pattern = "*|" + cls.STREAM_KEY
+                xstreams = {xstream: Redis.StreamGet.NEW.value \
+                    async for xstream in Redis.scan(key_pattern)}
+                verbose = "Initializing consumption of x-streams:"
+                for key in xstreams: verbose += f"\n => \"{key}\""
+                Log.info(verbose)
+                return await Redis.consume(update, src, xstreams)
+            return wrapped
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -98,6 +111,7 @@ class PolymarketGamma(Connector, Polymarket):
     freq_redis_report: int = field(kw_only = True,
         default = Polymarket.Event.MIN_UPD_FREQ)
     VENUE: ClassVar[str] = Polymarket.VENUE
+    STREAM_PREFIX: ClassVar[str] = "DATA"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
@@ -161,6 +175,7 @@ class PolymarketGamma(Connector, Polymarket):
             *[self._find_event(session, *item) for item in keys])
 
         verbose = dict()
+        new_event_map = bidict[str, str]()
         for key, event in zip(keys, events):
             (symbol, tf, shift) = key
             if (event is None): continue
@@ -168,9 +183,10 @@ class PolymarketGamma(Connector, Polymarket):
             if (parsed is None): continue
             for arrow in self.ARROWS_FROM_CHAR.values():
                 prefix, suffix = f"{symbol}{arrow}", f"{tf!r}+{shift}"
-                self.Event.MAP[prefix + suffix] = (id := parsed[arrow])
+                new_event_map[prefix + suffix] = (id := parsed[arrow])
                 verbose[(prefix, suffix)] = id[: 4] + "…" + id[-4 :]
 
+        self.Event.MAP = new_event_map
         delay = (time.time() - time_event.timestamp()) * 1e6
         verbose = Series(verbose).sort_index().dropna()
         verbose = verbose.rename_axis(["symbol", "tf"]).unstack("tf")
@@ -179,18 +195,16 @@ class PolymarketGamma(Connector, Polymarket):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def reconfig(self):
-        conn = await Postgres._client.acquire()
-        await self._reconfig(conn)
-        self._crons[self.reconfig] = Timedelta(
-              seconds = self.freq_redis_report)
-        await self.update_specs(conn, Polymarket.VENUE)
-        await conn.close()
+        async with Postgres._client.acquire() as conn:
+            await self._reconfig(conn)
+            self._crons[self.reconfig] = Timedelta(
+                  seconds = self.freq_redis_report)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Postgres.on_table(Connector.TABLE_CONFIG)
     async def _reconfig(self, conn: asyncpg.Connection):
-        Polymarket.Event.shift_keys(shift = 1)
-        await super().reconfig(conn, Polymarket.VENUE)
+        await super().reconfig(conn, self.name)
+        await self.update_specs(conn, Polymarket.VENUE)
         query_id, query_exp = list[str](), list[str]()
         condition = "WHEN (symbol = '{0}') THEN '{1}'"
         line_upper = f"UPDATE {self.TABLE_SYMBOLS} SET"

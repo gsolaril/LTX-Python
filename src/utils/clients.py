@@ -238,7 +238,20 @@ class RedisManager:
                     if src.debug: Log.debug(self.VERBOSE_XADD.format(N, stream, id, payload))
                     self._reporter.add(suffix)
                 except Exception as EXC:
-                    Log.exception(EXC)                    
+                    Log.exception(EXC)
+        
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def consume(self, func: Callable, src: Any, xstreams: dict[str, str]):
+        while True:
+            try:
+                response = await self.xreadgroup(src, Redis.Group.MONITOR, xstreams)
+                if not response: continue
+                for stream, messages in response:
+                    for mid, payload in messages:
+                        if isinstance(payload, dict): await func(payload)
+                        await Redis.xack(Redis.Group.MONITOR, stream, mid)
+            except asyncio.CancelledError: break
+            except Exception as EXC: Log.exception(EXC); break
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
