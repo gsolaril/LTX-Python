@@ -106,8 +106,7 @@ class DataBinance(DataConnectorWS, Binance):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def try_resub(self):
-        self._WS_to_resub.set() # FIXME: Freezes normal flow
-        Log.debug(f"{self.name}: allowing revision of subscriptions")
+        self._WS_to_resub.set()
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def get_urlh(self, path: str):

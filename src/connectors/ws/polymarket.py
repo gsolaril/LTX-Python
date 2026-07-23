@@ -26,6 +26,8 @@ class DataPolymarket(DataConnectorWS, Polymarket):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         self._xstreams = dict[str, str]()
+        name = f"{self.name}/update_ids"
+        self._procs[name] = self.update_ids
         self._crons[self.Event.shift_keys] = Timedelta(seconds = self.Event.MIN_UPD_FREQ)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

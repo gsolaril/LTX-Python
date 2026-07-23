@@ -208,12 +208,15 @@ class ExecConnector(Connector):
         xstreams = dict[str, str]()
         for account_id in self._sockets.keys():
             xname = self.STREAM_PREFIX + "|" + account_id
-            xstreams[xname] = "0-0"
+            xstreams[xname] = Redis.StreamGet.ALL.value
 
         while self.active:
             account_id = "N/A"
             try:
-                response = await Redis.xread(
+                if not xstreams:
+                    await asyncio.sleep(0.01)
+                    continue
+                response = await Redis._client.xread(
                   streams = xstreams, count = 1)
                 if not response: continue
                 for stream, messages in response:
