@@ -23,6 +23,7 @@ class DataCollector(StreamingAgent):
     TABLE_CONFIG: ClassVar[Postgres.Table] = Postgres.Table.MONITORING
     TS_CANDLES: ClassVar[ClickHouse.Table] = ClickHouse.Table.CANDLES
     TS_TICKS: ClassVar[ClickHouse.Table] = ClickHouse.Table.TICKS
+    XGROUP: ClassVar[str] = Redis.Group.MONITOR
     STREAM_PREFIX: ClassVar[str] = "DATA"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
@@ -128,7 +129,7 @@ class DataCollector(StreamingAgent):
                 new.add(stream)
         self._scan_ready.set()
         if self._xstreams:
-            await Redis.ensure_groups(list(self._xstreams))
+            await Redis.ensure_groups(self._xstreams)
         if not new: return
         new_str = str.join(", ", sorted(new))
         Log.info(f"New streams:\n => {new_str}")
@@ -161,8 +162,7 @@ class DataCollector(StreamingAgent):
         await self._scan_ready.wait()
         while True:
             try:
-                response = await Redis.xreadgroup(self,
-                    Redis.Group.MONITOR, self._xstreams)
+                response = await Redis.xread(self, self._xstreams)
                 if not response: continue
                 for stream, messages in response:
                     for message_id, payload in messages:

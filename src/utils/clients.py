@@ -116,9 +116,10 @@ class RedisManager:
         0.8: lambda value: Log.warning("Queue is {:.0%} full!".upper().format(value)),
         0.95: lambda value: Log.critical("Queue is {:.0%} full!".upper().format(value)),
     }
+    SEP = "|"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class Group(enum.StrEnum):
-        MONITOR, STRATEGY = "$", "$"
+        DATA, MONITOR, EXEC = "$", "$", "$"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class StreamGet(enum.StrEnum):
         ALL, NEW, LAST = "0-0", ">", "$"
@@ -154,21 +155,28 @@ class RedisManager:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def scan(self, pattern: str = STREAM_PREFIX + "|*"):
         async for K in self._client.scan_iter(pattern): yield K
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def xreadgroup(self, src: Any, group: Group,
-            streams: dict[str, str], *args, **kwargs):
-        consumer = src.__class__.__name__
-        if src.name: consumer += "|" + src.name
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def xread(self, src: Any, streams: dict[str, str],
+                    group: Group = None, *args, **kwargs):
         kwargs.setdefault("count", 100)
         kwargs.setdefault("block", 1000)
-        return await self._client.xreadgroup(group.name,
-                      consumer, streams, *args, **kwargs)
+        if group is not None:
+            consumer = src.__class__.__name__
+            if src.name: consumer += "|" + src.name
+            return await self._client.xreadgroup(
+                        group.name, consumer, streams, *args, **kwargs)
+        else: return await self._client.xread(streams, *args, **kwargs)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def xrecent(self, xstreams: set[str], n: int = 1):
+        for stream in xstreams:
+            for mid, payload in await self._client.xrevrange(
+              stream, count = n): yield stream, mid, payload
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def xack(self, group: Group, stream: str, message_id: str):
+    async def xack(self, stream: str, group: Group, message_id: str):
         return await self._client.xack(stream, group.name, message_id)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def ensure_groups(self, streams: list[str]):
-        for stream in streams:
+    async def ensure_groups(self, xstreams: set[str]):
+        for stream in xstreams:
             if stream in self._streams: continue
             mkstream = not await self._client.exists(stream)
             await self.xcreategroups(stream, mkstream = mkstream)
@@ -185,7 +193,7 @@ class RedisManager:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def add_streams(self, streams: list[str], src: Any):
         for stream in streams:
-            stream = str.join("|", [self.STREAM_PREFIX, src.STREAM_PREFIX, stream])
+            stream = str.join(self.SEP, [self.STREAM_PREFIX, src.STREAM_PREFIX, stream])
             if stream in self._streams: continue
             mkstream = not await self._client.exists(stream)
             await self.xcreategroups(stream, mkstream = mkstream)
@@ -231,7 +239,7 @@ class RedisManager:
                     payload: dict = await self._queue.get()
                     suffix, time_event, payload = payload.values()
                     id = str(time_event)[: -3] + "-" + str(time_event)[-3 :]
-                    stream = str.join("|", [self.STREAM_PREFIX, src.STREAM_PREFIX, suffix])
+                    stream = str.join(self.SEP, [self.STREAM_PREFIX, src.STREAM_PREFIX, suffix])
                     if stream not in self._streams: await self.add_streams([suffix], src)
                     payload["dus2"] = int(time.time() * 1e6 - time_event)
                     assert (await self._client.xadd(stream, payload, id, src.maxlen_redis))
@@ -240,16 +248,37 @@ class RedisManager:
                 except Exception as EXC:
                     Log.exception(EXC)
         
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def consume(self, func: Callable, src: Any, xstreams: dict[str, str]):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def consume(self, func: Callable,
+      src: Any, xstreams: set, n: int = 0):
+
+        name = f"\"{src.name}.{func.__name__}\" "
+        xstr = str.join("\n", map(" => \"{}\"".format, xstreams))
+        verbose = name + f"tracking X-Streams & {{0}}:\n" + xstr
+        xdict = dict.fromkeys(xstreams, src.XGROUP.value)
+      
+        if not n:
+            action = "ensuring groups"
+            Log.info(verbose.format(action))
+            await self.ensure_groups(xstreams)
+        elif isinstance(n, int) and (n > 0):
+            action = f"retrieving tail ({n})"
+            Log.info(verbose.format(action))
+            gen = self.xrecent(xstreams, n = n)
+            async for stream, mid, payload in gen:
+                await func(stream, mid, payload)
+
         while True:
             try:
-                response = await self.xreadgroup(src, Redis.Group.MONITOR, xstreams)
+                response = await self.xread(src, xdict)
                 if not response: continue
                 for stream, messages in response:
                     for mid, payload in messages:
-                        if isinstance(payload, dict): await func(payload)
-                        await Redis.xack(Redis.Group.MONITOR, stream, mid)
+                        if not isinstance(payload, dict): continue
+                        await self.xack(stream, src.XGROUP, mid)
+                        try: await func(stream, mid, payload)
+                        except Exception as EXC: Log.exception(EXC)
+
             except asyncio.CancelledError: break
             except Exception as EXC: Log.exception(EXC); break
 

@@ -91,6 +91,7 @@ class StreamingAgent(BaseAgent):
     maxlen_redis: int = field(init = False, kw_only = True, default = 10000)
     freq_redis_report: int = field(init = False, kw_only = True, default = 600)
     STREAM_PREFIX: ClassVar[str] = ...
+    XGROUP: ClassVar[str] = ...
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def setup(self):
         tasks = list[asyncio.Task]()

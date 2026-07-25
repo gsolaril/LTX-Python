@@ -47,18 +47,14 @@ class Polymarket(Venue):
         #▄▄▄▄▄▄▄▄▄▄▄▄▄
         @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def redis_updater(cls, func: Callable = None):
-            async def update(payload: dict):
+            async def update(stream: str, mid: str, payload: dict):
                 payload.pop("dus2", None)
                 cls.MAP = bidict(payload)
-                await func(payload)
+                await func(stream, payload, mid)
             async def wrapped(src: Connector):
-                key_pattern = "*|" + cls.STREAM_KEY
-                xstreams = {xstream: Redis.StreamGet.NEW.value \
-                    async for xstream in Redis.scan(key_pattern)}
-                verbose = "Initializing consumption of x-streams:"
-                for key in xstreams: verbose += f"\n => \"{key}\""
-                Log.info(verbose)
-                return await Redis.consume(update, src, xstreams)
+                xstreams = {str.join(Redis.SEP, [Redis.STREAM_PREFIX,
+                    PolymarketGamma.STREAM_PREFIX, cls.STREAM_KEY])}
+                return await Redis.consume(update, src, xstreams, 1)
             return wrapped
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -204,7 +200,8 @@ class PolymarketGamma(Connector, Polymarket):
     @Postgres.on_table(Connector.TABLE_CONFIG)
     async def _reconfig(self, conn: asyncpg.Connection):
         await super().reconfig(conn, self.name)
-        await self.update_specs(conn, Polymarket.VENUE)
+        await self.update_specs(conn, Polymarket.VENUE,
+            "({})".format(str.join("|", self.sources)))
         query_id, query_exp = list[str](), list[str]()
         condition = "WHEN (symbol = '{0}') THEN '{1}'"
         line_upper = f"UPDATE {self.TABLE_SYMBOLS} SET"

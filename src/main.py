@@ -25,8 +25,9 @@ def main():
 
     Log.info(f"Agent: \"{agent.__name__}\"")
     try: EventLoop.run_until_complete(agent().start())
-    except Exception as EXC: Log.exception(EXC)
-    finally: Log.success(f"Exiting \"{name}\"...")
+    except KeyboardInterrupt: print(); Log.success("See ya :)")
+    except Exception as EXC: Log.exception("Fatal error:", EXC)
+    finally: Log.warning(f"Exiting \"{name}\"...")
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 if (__name__ == "__main__"): main()

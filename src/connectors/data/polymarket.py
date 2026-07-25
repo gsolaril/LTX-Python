@@ -15,6 +15,7 @@ from src.utils import Log, Postgres, Redis, TZ
 class DataPolymarket(DataConnectorWS, Polymarket):
 
     URL_WS: ClassVar[str] = "wss://ws-subscriptions-clob.polymarket.com"
+    DEFAULT_PAYLOAD = {"type": "market", "custom_feature_enabled": True}
     
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self): super().__init__(
@@ -36,18 +37,20 @@ class DataPolymarket(DataConnectorWS, Polymarket):
         delay = (time.time() - start_at) * 1e6
         Log.info(f"Keys shifted... delay: {delay:.0f} μs...")
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def try_resub(self, payload: dict):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def try_resub(self, stream: str, payload: dict, mid: str):
+        self._WS_to_resub.set()
         if self.debug: Log.debug(
             "About to resubscribe to:\n => "
             + str.join(", ", sorted(payload)))
-        self._WS_to_resub.set()
     
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Postgres.on_table(DataConnectorWS.TABLE_CONFIG)
     async def reconfig(self, conn: asyncpg.Connection,
               venue: str = None, sources: set = None):
         await Connector.reconfig(self, conn, venue)
+        sources = "({})".format(str.join("|", self.sources))
+        await self.update_specs(conn, venue, sources)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def get_subs(self, subs: set[str], is_sub: bool):
         subs_current = set(self.Event.MAP.values())
@@ -55,6 +58,10 @@ class DataPolymarket(DataConnectorWS, Polymarket):
         else: subs_due = subs.difference(subs_current)
         payload = {"assets_ids": sorted(subs_due), "channels": ["book"], 
                   "operation": "SUBSCRIBE" if is_sub else "UNSUBSCRIBE"}
+        if not subs:
+            payload.pop("operation")
+            payload.update(self.DEFAULT_PAYLOAD)
+            print("PAYLOAD:", payload)
         return subs_due, [payload]
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

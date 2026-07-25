@@ -6,6 +6,8 @@ from pandas import Timestamp, Timedelta
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, NamedTuple
 
+from pandas.core.frame import Literal
+
 from src.models import *
 from src.utils import *
 
@@ -83,6 +85,7 @@ class Connector(ControllableAgent):
     # ↑ Sources' snapshot directly from DB. Already as set since "update_config".
     TABLE_CONFIG: ClassVar[Postgres.Table] = Postgres.Table.CONNECTORS
     IGNORE_TFS: ClassVar[set[TimeFrame]] = set()
+    XGROUP: ClassVar[str] = Redis.Group.DATA
     VENUE: ClassVar[str] = ...
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
@@ -135,8 +138,11 @@ class Connector(ControllableAgent):
         if (symbols is None): symbols = set(self._specs)
         query = f"SELECT * FROM {table} WHERE (venue = '{venue}')"
         if (len(symbols) > 0):
-            if isinstance(symbols, str): clause = f"~ '{symbols}'"
-            else: clause = "IN ({})".format(str.join(", ", [f"'{S}'" for S in symbols]))
+            if not isinstance(symbols, str):
+                symbols_list = map("'{}'".format, symbols)
+                symbols_str = str.join(", ", symbols_list)
+                clause = "IN ({})".format(symbols_str)
+            else: clause = f"~ '{symbols}'"
             query += f" AND (symbol {clause})"
         if self.debug: Log.debug(f"Querying specs:\n => {query}")
         result = [dict(row) for row in await conn.fetch(query)]
@@ -165,7 +171,6 @@ class DataConnector(Connector):
     async def reconfig(self, conn: asyncpg.Connection,
               venue: str = None, sources: set = None):
         await super().reconfig(conn, venue, sources)
-        print("SOURCES:", self._sources)
         await self.update_specs(conn, venue, self._sources)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
@@ -176,6 +181,7 @@ class ExecConnector(Connector):
     STREAM_PREFIX: ClassVar[str] = "EXEC"
     VERBOSE_EXEC: ClassVar[str] = "Order {0} {1}: {2}"
     VERBOSE_ERROR_OVER: ClassVar[str] = "Order map too large. Dropping oldest order...\n => {0!r}"
+    XGROUP: ClassVar[str] = Redis.Group.EXEC
     class Reject(Exception): pass
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
