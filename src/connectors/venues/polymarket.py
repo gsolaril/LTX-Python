@@ -29,7 +29,10 @@ class Polymarket(Venue):
         index: str = field(kw_only = True, default = "IDS")
         STREAM_KEY: ClassVar[str] = "Polymarket|GAMMA"
         MAP: ClassVar[bidict[str, str]] = bidict()
+        REF: ClassVar[dict[str, set]] = dict()
         MIN_UPD_FREQ: ClassVar[int] = 300
+        MIN_UPD_TF: ClassVar[TimeFrame] = TimeFrame(
+                      Timedelta(seconds = MIN_UPD_FREQ))
         #▄▄▄▄▄▄▄▄▄▄
         @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def __dict__(self): return {"stream": self.STREAM_KEY,
@@ -37,9 +40,11 @@ class Polymarket(Venue):
         #▄▄▄▄▄▄▄▄▄▄▄▄▄
         @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def shift_keys(cls, shift: int = 1):
+            min_tf = cls.MIN_UPD_TF.name
             new_map: bidict[str, str] = bidict()
             for old_symbol, id in cls.MAP.items():
                 key, old_shift = old_symbol.split("+")
+                if not key.endswith(min_tf): continue
                 new_shift = int(old_shift) - shift
                 if (new_shift < 0): continue
                 new_map[f"{key}+{new_shift}"] = id
@@ -47,14 +52,10 @@ class Polymarket(Venue):
         #▄▄▄▄▄▄▄▄▄▄▄▄▄
         @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def redis_updater(cls, func: Callable = None):
-            async def update(stream: str, mid: str, payload: dict):
-                payload.pop("dus2", None)
-                cls.MAP = bidict(payload)
-                await func(stream, payload, mid)
             async def wrapped(src: Connector):
                 xstreams = {str.join(Redis.SEP, [Redis.STREAM_PREFIX,
                     PolymarketGamma.STREAM_PREFIX, cls.STREAM_KEY])}
-                return await Redis.consume(update, src, xstreams, 1)
+                return await Redis.consume(func, src, xstreams, 1)
             return wrapped
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -108,11 +109,12 @@ class PolymarketGamma(Connector, Polymarket):
         default = Polymarket.Event.MIN_UPD_FREQ)
     VENUE: ClassVar[str] = Polymarket.VENUE
     STREAM_PREFIX: ClassVar[str] = "DATA"
+    SYM_QUERY_BY: ClassVar[str] = "REGEX"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
-        self._crons[self.reconfig] = Timedelta(
-              seconds = self.freq_redis_report)
+        self._crons[self.update_ids] = Timedelta(
+                seconds = self.freq_redis_report)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def _parse_ids(cls, event: Dict[str, Any]):
@@ -153,8 +155,8 @@ class PolymarketGamma(Connector, Polymarket):
             if isinstance(ids, list) and len(ids): return ids[0]
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Redis.stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_ids(self, shifts: int = 3):
+    @Redis.stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def get_ids(self, shifts: int = 3):
         time_event = Timestamp.now("UTC")
         verbose, pending = dict(), dict()
         for symbol_obj in self._specs.values():
@@ -171,17 +173,22 @@ class PolymarketGamma(Connector, Polymarket):
             *[self._find_event(session, *item) for item in keys])
 
         verbose = dict()
+        new_ref_map = dict[str, set]()
         new_event_map = bidict[str, str]()
         for key, event in zip(keys, events):
             (symbol, tf, shift) = key
             if (event is None): continue
             parsed = self._parse_ids(event)
             if (parsed is None): continue
+            if (symbol not in new_ref_map):
+                new_ref_map[symbol] = set()
             for arrow in self.ARROWS_FROM_CHAR.values():
                 prefix, suffix = f"{symbol}{arrow}", f"{tf!r}+{shift}"
                 new_event_map[prefix + suffix] = (id := parsed[arrow])
                 verbose[(prefix, suffix)] = id[: 4] + "…" + id[-4 :]
+                new_ref_map[symbol].add(prefix + suffix)
 
+        self.Event.REF = new_ref_map
         self.Event.MAP = new_event_map
         delay = (time.time() - time_event.timestamp()) * 1e6
         verbose = Series(verbose).sort_index().dropna()
@@ -189,26 +196,24 @@ class PolymarketGamma(Connector, Polymarket):
         Log.success(f"Got IDs... delay: {delay:.0f} μs...\n{verbose}")
         yield self.Event(time = time_event)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def reconfig(self):
-        async with Postgres._client.acquire() as conn:
-            await self._reconfig(conn)
-            self._crons[self.reconfig] = Timedelta(
-                  seconds = self.freq_redis_report)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self, conn: asyncpg.Connection, sources: set):
+        await super().reconfig(conn, sources)
+        await self.update_specs(conn, self.VENUE, sources)
+        self._crons[self.update_ids] = Timedelta(
+                seconds = self.freq_redis_report)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Postgres.on_table(Connector.TABLE_CONFIG)
-    async def _reconfig(self, conn: asyncpg.Connection):
-        await super().reconfig(conn, self.name)
-        await self.update_specs(conn, Polymarket.VENUE,
-            "({})".format(str.join("|", self.sources)))
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update_ids(self, conn: asyncpg.Connection = None, sources: set = None):
+        [*await self.get_ids()]
+        return
+
         query_id, query_exp = list[str](), list[str]()
         condition = "WHEN (symbol = '{0}') THEN '{1}'"
         line_upper = f"UPDATE {self.TABLE_SYMBOLS} SET"
-        line_lower = f"WHERE (venue = '{Polymarket.VENUE}');"
+        line_lower = f"WHERE (venue = '{self.VENUE}');"
 
         TAB = " " * 4
-        [*await self.update_ids()]
         for symbol, id in Polymarket.Event.MAP.items():
             quote, tf, shift = self.split_symbol(symbol)
             query_id.append(2 * TAB + condition.format(symbol, id))

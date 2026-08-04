@@ -1,10 +1,10 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import asyncio, json
+import asyncio, asyncpg, json
 from typing import Any, Callable, ClassVar
 from aiohttp import WSMsgType, ClientSession
 from aiohttp import ClientWebSocketResponse
 from src.connectors.base import Venue, Channel, Connector
-from src.connectors.base import DataConnector, ExecConnector 
+from src.connectors.base import DataConnector, ExecConnector
 from src.models import *
 from src.utils import *
 
@@ -21,21 +21,20 @@ class ChannelWS(Channel):
         self.url_args: Callable = url_args
         self.on_message: Callable = on_message
         self._WS: ClientWebSocketResponse = None
-        self._WS_connected = asyncio.Event()
-        self._subs_known = asyncio.Event()
-        self._subs = set[str]()
+        self._WS_conned = asyncio.Event() # WebSocket connected.
+        self._WS_subbed = asyncio.Event() # WebSocket subscribed.
+        self._sources = set[str]()
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def send_ping(self, sender: bool = False):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def send_ping(self, on_resp: bool = False):
 
         if isinstance(self.on_ping, Callable):
-            try: await self.on_ping(self._WS, sender)
+            try: await self.on_ping(self._WS, on_resp)
             except Exception as EXC:
-                error = self.VERBOSE_NOCONN.format(self.name, 
-                    "ping sent" if sender else "ping received")
-                Log.exception(error, EXC)
-                self._subs_known.clear()
-                self._subs.clear()
+                role = "received" if on_resp else "sent"
+                Log.exception(self.VERBOSE_NOCONN.format(
+                    self.name, f"ping was {role}"), EXC)
+                self._WS_subbed.clear()
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def listen(self, src: Connector):
@@ -47,9 +46,9 @@ class ChannelWS(Channel):
                     args = await self.url_args()
                     Log.info(self.VERBOSE_RECONN.format(conn_name, args["url"]))
                     async with session.ws_connect(**args, heartbeat = 30) as WS:
-                        self._WS = WS ; self._WS_connected.set()
+                        self._WS = WS ; self._WS_conned.set()
                         src._sockets[conn_name] = self._WS
-                        await self._subs_known.wait()
+                        await self._WS_subbed.wait()
                         Log.info(self.VERBOSE_CONNED.format(conn_name))
                         async for message in self._WS:
                             if (message.type == WSMsgType.TEXT):
@@ -70,9 +69,9 @@ class ChannelWS(Channel):
 
                 except Exception as EXC:
                     Log.exception(self.VERBOSE_ERROR.format(conn_name), EXC)
-                    self._subs.clear(); self._WS = None
-                    self._WS_connected.clear()
-                    self._subs_known.clear()
+                    self._WS_conned.clear()
+                    self._WS_subbed.clear()
+                    self._WS = None
                     if src.active:
                         await asyncio.sleep(2)
 
@@ -89,51 +88,59 @@ class DataConnectorWS(DataConnector):
             self._sources_old[datafeed.name] = set[set]()
             self._procs[f"{datafeed.name}/stream"] = datafeed.listen
             self._procs[f"{datafeed.name}/update"] = datafeed.update
+    
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __post_init__(self):
+        super().__post_init__()
+        self._WS_to_resub = asyncio.Event()  # Trigger subscription methods of WebSocket objects, cron-based (Binance) or event-based (Polymarket).
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self, conn: asyncpg.Connection, sources: set[str]):
+        await super().reconfig(conn, sources)
+        self._WS_to_resub.set()
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataChannelWS(ChannelWS):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, name: str, on_message: Callable, url_args: Callable, 
-                       on_ping: Callable = None, get_subs: Callable = None):
+              on_ping: Callable = None, get_sub_payloads: Callable = None):
 
         super().__init__(name, on_message, url_args, on_ping)
-        self.get_subs: Callable = get_subs
+        self.get_sub_payloads: Callable = get_sub_payloads
     
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update(self, src: DataConnector):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update(self, src: DataConnectorWS):
         
         conn_name = f"{src.name}/{self.name}"
         Log.warning(f"WS for \"{conn_name}\" update loop started.")
         while src.active:
             await src._WS_to_resub.wait()
-            await self._WS_connected.wait()
-            if self._subs: await self.send_ping(True)
-
-            subs_new = set()
-            if (subs := src._sources_new[self.name]):
-                subs_new, payload_new = self.get_subs(subs, True)
-            subs_old = set()
-            if (subs := src._sources_old[self.name]):
-                subs_old, payload_old = self.get_subs(subs, False)
+            await self._WS_conned.wait()
+            payloads_old, payloads_new = list(), list()
+            if (sources_old := src._sources_old[self.name]):
+                sources_old, payloads_old = self.get_sub_payloads(sources_old, Channel.Action.UNSUB)
+            if (sources_new := src._sources_new[self.name]):
+                mode = Channel.Action.SUB if self._WS_subbed.is_set() else Channel.Action.INIT
+                sources_new, payloads_new = self.get_sub_payloads(sources_new, mode)
 
             src._WS_to_resub.clear()
             if (self._WS is None) or self._WS.closed:
-                self._subs.clear(); continue
-            if (not subs_old) and (not subs_new): continue
-            Log.info(self.verbose_subs(subs_old, subs_new))
+                self._sources.clear(); continue
+            if (not sources_old) and (not sources_new): continue
+            Log.info(self.verbose_subs(sources_old, sources_new))
 
             try:
-                if subs_new:
-                    for payload in payload_new:
+                if payloads_old:
+                    for payload in payloads_old:
                         await self._WS.send_json(payload)
-                    self._subs = self._subs | subs_new
-                    src._sources_new[self.name].clear()
-                    self._subs_known.set()
-                if subs_old:
-                    for payload in payload_old:
-                        await self._WS.send_json(payload)
-                    self._subs = self._subs - subs_old
                     src._sources_old[self.name].clear()
+                    self._sources -= sources_old
+                if payloads_new:
+                    for payload in payloads_new:
+                        await self._WS.send_json(payload)
+                    src._sources_new[self.name].clear()
+                    self._sources |= sources_new
+                    self._WS_subbed.set()
             except Exception as EXC:
                 Log.exception(self.VERBOSE_NOCONN.format(conn_name, "sub"), EXC)
 
@@ -148,7 +155,7 @@ class ExecChannelWS(ChannelWS):
         super().__init__(name, on_message, url_args, on_ping)
         self._WS: ClientWebSocketResponse = None
         self.get_subs: Callable = get_subs
-
+        
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update(self, connector: ExecConnectorWS): ...
 
@@ -178,6 +185,16 @@ class ExecConnectorWS(ExecConnector):
                   on_ping = self.on_ping, url_args = self.get_url_args(cred, channel))
             self._procs[name] = channel.listen
             self._sockets[cred.aid] = channel._WS
+    
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __post_init__(self):
+        super().__post_init__()
+        self._WS_to_resub = asyncio.Event()
+        
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self, conn: asyncpg.Connection, sources: set[str]):
+        await super().reconfig(conn, sources)
+        self._WS_to_resub.set()
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def get_url_args(self, cred: Venue.Credentials, channel: str): ...

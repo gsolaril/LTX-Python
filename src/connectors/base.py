@@ -2,11 +2,10 @@
 import asyncio, asyncpg
 from bidict import bidict
 from getpass import getpass
+from enum import IntEnum, StrEnum
 from pandas import Timestamp, Timedelta
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, NamedTuple
-
-from pandas.core.frame import Literal
+from typing import Any, Callable, ClassVar, NamedTuple
 
 from src.models import *
 from src.utils import *
@@ -26,6 +25,8 @@ class Venue:
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         if (cls is Venue): return
+        hardcoded_venue = cls.__dict__.get("VENUE", ...)
+        if (hardcoded_venue is not Ellipsis): return
         venue: str = cls.__name__
         for base in cls.__bases__:
             if not issubclass(base, Venue): continue
@@ -92,19 +93,17 @@ class Connector(ControllableAgent):
         super().__post_init__()
         self.name = self.VENUE
         self._offset = Timedelta(0)          # Clock difference between venue/server and local time.
-        self._specs = dict[str, Symbol]()    # Symbol specs from DB, for given venue, for symbols in dataclass attribute.
         self._sources_new = dict[str, set]() # Any new source (symbol / account / etc.) coming from updates, to be subscribed to.
         self._sources_old = dict[str, set]() # Any old source (symbol / account / etc.) coming from updates, to be unsubscribed from.
         self._sources = set[str]()           # Sources as state variable of the connector. New/old sources are initially absent/present here.
         self._sockets = dict[str, Any]()     # WebSocket objects already linked to URLs (used by ExecConnectors to send requests/orders).
-        self._WS_to_resub = asyncio.Event()  # Trigger subscription methods of WebSocket objects, cron-based (Binance) or event-based (Polymarket).
         self._bundle = StreamingBundle(
               maxlen = 60, ignore_tfs = self.IGNORE_TFS.copy())
         self._crons[self._bundle.resample] = TimeFrame.MIN.value
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def setup(self):
-        tasks = await super().setup() 
+        tasks = await super().setup()
         for name, process in self._procs.items():
             process_name = f"{self.name}/{name}"
             tasks.append(asyncio.create_task(
@@ -112,42 +111,14 @@ class Connector(ControllableAgent):
         return tasks
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def get_stream_names(self, streams: set[str]): ...
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Postgres.on_table(TABLE_CONFIG)#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def reconfig(self, conn: asyncpg.Connection,
-              venue: str = None, sources: set = None):
-        await super().reconfig(conn, venue)
-        if sources is None: sources = self.sources.copy()
-        sources_old = self._sources.difference(sources)
-        sources_new = sources.difference(self._sources)
-        streams = self.get_stream_names(sources_new)
-        if streams: await Redis.add_streams(streams, self)
-        for name in self._sources_new.keys():
-            self._sources_new[name].update(sources_new)
-            self._sources_old[name].update(sources_old)
-        
-        self._sources = sources
-        self.config_verbose()
-    
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_specs(self, conn: asyncpg.Connection,
-                  venue: str = None, symbols: set = None):
-        table = self.TABLE_SYMBOLS
-        if (venue is None): venue = self.VENUE
-        if (symbols is None): symbols = set(self._specs)
-        query = f"SELECT * FROM {table} WHERE (venue = '{venue}')"
-        if (len(symbols) > 0):
-            if not isinstance(symbols, str):
-                symbols_list = map("'{}'".format, symbols)
-                symbols_str = str.join(", ", symbols_list)
-                clause = "IN ({})".format(symbols_str)
-            else: clause = f"~ '{symbols}'"
-            query += f" AND (symbol {clause})"
-        if self.debug: Log.debug(f"Querying specs:\n => {query}")
-        result = [dict(row) for row in await conn.fetch(query)]
-        if not result: return Log.error(f"No specs found:\n => {query}")
-        for item in result: self._specs[item["symbol"]] = Symbol(**item)
+    def local_to_stream(self, sources: set[str]): ...
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self, conn: asyncpg.Connection, sources: set[str]):
+        if (sources_old := self.sources.difference(sources)):
+            self._sources_old = {K: sources_old.copy() for K in self._sources_old}
+        if (sources_new := sources.difference(self.sources)):
+            self._sources_new = {K: sources_new.copy() for K in self._sources_new}
+        await self.update_specs(conn, self.VENUE, sources)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -155,23 +126,22 @@ class Connector(ControllableAgent):
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataConnector(Connector):
     STREAM_PREFIX: ClassVar[str] = "DATA"
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def get_stream_names(self, streams: set[str]):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def local_to_stream(self, sources: set[str]):
         kw = {"venue": self.VENUE, "symbol": None}
         stream_names = set[str]()
-        for symbol in streams:
+        for symbol in sources:
             kw["symbol"] = symbol
             stream_names.add(
                 Quote.STREAM_KEY.format(**kw, tf = "T1"))
             for tf in TimeFrame: stream_names.add(
                 Quote.STREAM_KEY.format(**kw, tf = tf.name))
         return stream_names
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Postgres.on_table(Connector.TABLE_CONFIG)#█▄▄▄▄▄
-    async def reconfig(self, conn: asyncpg.Connection,
-              venue: str = None, sources: set = None):
-        await super().reconfig(conn, venue, sources)
-        await self.update_specs(conn, venue, self._sources)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self, conn: asyncpg.Connection, sources: set[str]):
+        await super().reconfig(conn, sources)
+        streams = self.local_to_stream(sources)
+        await Redis.add_streams(streams, self)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -193,11 +163,11 @@ class ExecConnector(Connector):
         listen_orders = self.__class__.listen_orders
         name = f"{self.name}/listen_orders"
         self._procs[name] = listen_orders
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def get_stream_names(self, streams: set[str]):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def local_to_stream(self, sources: set[str]):
         kw = {"venue": self.VENUE, "account_id": None}
         stream_names = set[str]()
-        for account in streams:
+        for account in sources:
             kw["account_id"] = account
             stream_names.add(Response.STREAM_KEY.format(**kw))
             for tf in TimeFrame:
@@ -205,12 +175,11 @@ class ExecConnector(Connector):
                     symbol = "NAV", tf = tf.name)
                 stream_names.add(stream_name)
         return stream_names
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Postgres.on_table(Connector.TABLE_CONFIG)#█▄▄▄▄▄
-    async def reconfig(self, conn: asyncpg.Connection,
-              venue: str = None, sources: set = None):
-        await super().reconfig(conn, venue, sources)
-        await self.update_specs(conn, venue)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self, conn: asyncpg.Connection, sources: set[str]):
+        await super().reconfig(conn, sources)
+        streams = self.local_to_stream(sources)
+        await Redis.add_streams(streams, self)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def listen_orders(self):
@@ -262,15 +231,17 @@ class ExecConnector(Connector):
 class Channel:
 
     BULLET = "\n\t-> "
-    VERBOSE_CONNED = "\"{}\" ready for messages."
     VERBOSE_RECONN = "\"{}\" connecting to \"{}\"..."
-    VERBOSE_NOCONN = "\"{}\" {} failed (will retry after reconnect)"
+    VERBOSE_CONNED = "\"{}\" connected, subscribed & ready for messages."
+    VERBOSE_NOCONN = "\"{}\" failed when {} (will retry after reconnect)"
     VERBOSE_CLOSED = "\"{}\" closed, reconnecting..."
     VERBOSE_WDTYPE = "\"{}\" weird type: \"{}\""
     VERBOSE_NOJSON = "\"{}\" got non-JSON: \"{}\""
     VERBOSE_ERROR = "\"{}\" error"
     VERBOSE_ERROR_XADD = "\"{}\" XADD failed:" + BULLET
 
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    class Action(IntEnum): INIT, SUB, UNSUB = 0, 1, 2
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, name: str): self.name = name
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

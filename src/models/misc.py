@@ -4,7 +4,7 @@ from collections import defaultdict, OrderedDict
 from typing import Any, List, ClassVar, Callable
 from dataclasses import dataclass, field, Field
 from pandas import DataFrame, Timestamp, Timedelta
-from enum import Enum, EnumMeta
+from enum import Enum, EnumMeta, StrEnum
 from eth_account import Account
 from sympy import divisors
 from src.utils import TZ
@@ -135,6 +135,10 @@ class Symbol(DBClass):
     def is_expired(self, time: Timestamp = None):
         if (time is None): time = Timestamp.now(TZ)
         return (time >= self.expiration)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    QUERY_BY: ClassVar[dict[str, Callable]] = {
+        "ALL": lambda A: "", "REGEX": lambda A: "\nAND (symbol ~ '({})')".format(str.join("|", A)),
+        "ARRAY": lambda A: "\nAND (symbol IN {})".format(str.join(", ", map("'{}'".format, A))) }
     
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

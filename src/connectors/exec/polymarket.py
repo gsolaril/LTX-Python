@@ -35,8 +35,8 @@ class ExecPolymarket(ExecConnector, Polymarket):
         await conn.close()
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Postgres.on_table(ExecConnector.TABLE_CONFIG)
-    async def _reconfig(self, conn: asyncpg.Connection):
+    @Postgres.on_table_config(ExecConnector.TABLE_CONFIG)
+    async def _reconfig(self, conn: asyncpg.Connection, config: dict = None):
         Polymarket.Event.shift_keys(shift = 1)
         await super().reconfig(conn, Polymarket.VENUE)
 

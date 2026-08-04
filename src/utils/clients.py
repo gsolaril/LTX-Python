@@ -17,7 +17,7 @@ asyncio.set_event_loop(EventLoop)
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class PostgresManager:
-    _QUERY = """
+    _QUERY_NOTIFY = """
       CREATE OR REPLACE FUNCTION notify_{0}() RETURNS trigger AS $$ BEGIN
           PERFORM pg_notify('{0}', json_build_object('operation', TG_OP,
           'table', TG_TABLE_NAME, 'time', CURRENT_TIMESTAMP, 'query_tag',
@@ -56,29 +56,56 @@ class PostgresManager:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def _queue_handler(self, _conn, _pid, _channel, payload):
         self._queue.put_nowait(payload)
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def on_table(self, table: Table):
-        def noop(func: Callable): return func
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def _decorator_base(self, make_listener: Callable, table: Any):
         def decorator(func: Callable):
-            @functools.wraps(func)
-            async def wrapped(*args, **kwargs):
-                return await func(*args, **kwargs)
-            src = func.__qualname__.rsplit(".", 1)[0]
-            if src not in self._decorated:
-                self._decorated[src] = dict()
-            self._decorated[src][table.value] = wrapped
-            return wrapped
-        if not isinstance(table, self.Table): return noop
-        else: return decorator
+            owner = func.__qualname__.rsplit(".", 1)[0]
+            key = table.value if isinstance(table, self.Table) else (
+                table if isinstance(table, str) else None)
+            self._decorated.setdefault(owner, {})[key] = make_listener(func, table)
+            return func
+        return decorator
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def on_table_base(self, table: Any):
+        def make_listener(func: Callable, _table: Any):
+            async def listener(src: Any, conn: asyncpg.Connection):
+                return await func(src, conn)
+            return listener
+        return self._decorator_base(make_listener, table)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def on_table_config(self, table: Any = None):
+        def make_listener(func: Callable, decorated_table: Any):
+            async def listener(src: Any, conn: asyncpg.Connection):
+                t = decorated_table if isinstance(decorated_table, self.Table) \
+                    else getattr(src, "TABLE_CONFIG", None)
+                if not isinstance(t, self.Table):
+                    return Log.error(f"No TABLE_CONFIG for \"{type(src).__name__}\"")
+                name = src.name
+                query = f"SELECT * FROM {t.value} WHERE (name = '{name}');"
+                row = await conn.fetchrow(query)
+                if (row is None):
+                    return Log.error(f"No config found for \"{name}\":\n => {query}")
+                config = dict(row)
+                if "sources" in config:
+                    sources: dict = json.loads(config.pop("sources"))
+                    config["sources"] = {S for S, V in sources.items() if V}
+                return await func(src, conn, config = config)
+            return listener
+        return self._decorator_base(make_listener, table)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def _get_listeners(self, src: Any):
         listeners = dict[str, Callable]()
-        mro = {C.__name__ for C in type(src).mro()}
-        dump = set(self._decorated).difference(mro)
-        for src_name in dump: self._decorated.pop(src_name)
-        for src_name, table_dict in self._decorated.items():
-            for table, func in table_dict.items():
-                listeners[table] = func
+        mro = type(src).mro()
+        mro_names = {C.__name__ for C in mro}
+        for owner in list(self._decorated):
+            if owner not in mro_names: self._decorated.pop(owner)
+        for cls in mro:  # most specific first
+            for table, func in self._decorated.get(cls.__name__, {}).items():
+                if table is None:
+                    t = getattr(src, "TABLE_CONFIG", None)
+                    if not isinstance(t, self.Table): continue
+                    table = t.value
+                if table not in listeners: listeners[table] = func
         return listeners
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def __call__(self, src: Any):
@@ -89,7 +116,7 @@ class PostgresManager:
         for func in listeners.values():
             await func(src, conn)
         for table, func in listeners.items():
-            await conn.execute(self._QUERY.format(table))
+            await conn.execute(self._QUERY_NOTIFY.format(table))
             await conn.add_listener(table, self._queue_handler)
             verbose += f"\n => \"{table}\": \"{func.__qualname__}\""
         Log.success(verbose)
@@ -130,7 +157,7 @@ class RedisManager:
         host, port = creds.IP.split(":")
         tstr = Timestamp.now(TZ).strftime("%Y%m%d%H%M%S%f")
         args = {"decode_responses": True, "host": host, "port": int(port),
-            "username": creds.USERNAME, "password": creds.PASSWORD, "db": 0}
+          "username": creds.USERNAME, "password": creds.PASSWORD, "db": 0}
         client = RedisClient(**args)
         query_1, query_2 = f"SET test {tstr}", f"GET test"
         assert (await client.execute_command(query_1) == "OK")
@@ -385,13 +412,13 @@ except Exception as EXC: Log.exception(EXC); sys.exit(1)
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 if __name__ == "__main__":
 
-    @PostgresManager.on_table("test_postgres_listener")
+    @PostgresManager.on_table_base("test_postgres_listener")
     async def on_notify_1(conn: asyncpg.Connection):
         query = "SELECT * FROM test_postgres_listener"
         table = DataFrame(map(dict, await conn.fetch(query)))
         print("table:"), print(table)
 
-    @PostgresManager.on_table("accounts")
+    @PostgresManager.on_table_base("accounts")
     async def on_notify_2(conn: asyncpg.Connection):
         query = "SELECT * FROM accounts"
         table = DataFrame(map(dict, await conn.fetch(query)))

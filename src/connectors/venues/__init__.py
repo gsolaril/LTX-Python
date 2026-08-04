@@ -9,7 +9,7 @@ folder = pathlib.Path(__file__).parent
 prefix = str.join("-", [folder.parent.stem, "misc", ""])
 
 classes = [PolymarketGamma]
-agents = {prefix + str.lower(getattr(cls, "VENUE")): cls for cls in classes}
+agents = {prefix + cls.__name__.lower(): cls for cls in classes}
 __all__.append("agents")
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 #███████████████████████████████████████████████████████████████████████████████████████████

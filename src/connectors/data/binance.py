@@ -3,7 +3,7 @@ from pandas import Timestamp
 from typing import Any, Dict, ClassVar
 from aiohttp import ClientWebSocketResponse
 from src.connectors.venues import Binance, BinanceCoin, BinanceSpot, BinanceUsdm
-from src.connectors.ws import DataConnectorWS, DataChannelWS
+from src.connectors.ws import Channel, DataConnectorWS, DataChannelWS
 from src.models import Tick, Candle, TimeFrame
 from src.utils import Config, Redis, TZ
 
@@ -12,6 +12,7 @@ from src.utils import Config, Redis, TZ
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataBinance(DataConnectorWS, Binance):
 
+    SYM_QUERY_BY: ClassVar[str] = "ARRAY"
     FEED_PATH_TICK: ClassVar[str] = ...
     FEED_PATH_KLINE: ClassVar[str] = ...
     CHANNEL_KEY_TICK: ClassVar[str] = ...
@@ -22,10 +23,10 @@ class DataBinance(DataConnectorWS, Binance):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self): super().__init__(
         ticks = DataChannelWS(name = "ticks",
-            get_subs = self.get_subs_ticks, on_message = self.on_ticks,
+            get_sub_payloads = self.get_subs_ticks, on_message = self.on_ticks,
             on_ping = self.on_ping, url_args = self.get_url_headers_ticks),
         klines = DataChannelWS(name = "klines",
-            get_subs = self.get_subs_klines, on_message = self.on_klines,
+            get_sub_payloads = self.get_subs_klines, on_message = self.on_klines,
             on_ping = self.on_ping, url_args = self.get_url_headers_klines))
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -46,17 +47,19 @@ class DataBinance(DataConnectorWS, Binance):
     async def get_url_headers_ticks(self): return await self.get_urlh(self.FEED_PATH_TICK)
     async def get_url_headers_klines(self): return await self.get_urlh(self.FEED_PATH_KLINE)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def get_subs(self, symbols: set, is_sub: bool, key: str):
-        subs = {str.lower(symbol) + key for symbol in symbols}
-        payload = {"id": 1, "params": sorted(subs), "method": None}
-        payload["method"] = "SUBSCRIBE" if is_sub else "UNSUBSCRIBE"
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def get_subs(self, symbols: set, action: Channel.Action, key: str):
+        unsub = (action == Channel.Action.UNSUB)
+        method = "UNSUBSCRIBE" if unsub else "SUBSCRIBE"
+        subs = {str.lower(S) + key for S in symbols}
+        payload = {"id": 1, "params": sorted(subs)}
+        payload["method"] = method
         return subs, [payload]
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def get_subs_ticks(self, symbols: set, is_sub: bool):
-        return self.get_subs(symbols, is_sub, self.CHANNEL_KEY_TICK)
-    def get_subs_klines(self, symbols: set, is_sub: bool):
-        return self.get_subs(symbols, is_sub, self.CHANNEL_KEY_KLINE)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def get_subs_ticks(self, sources: set, action: Channel.Action):
+        return self.get_subs(sources, action, self.CHANNEL_KEY_TICK)
+    def get_subs_klines(self, sources: set, action: Channel.Action):
+        return self.get_subs(sources, action, self.CHANNEL_KEY_KLINE)
     
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_ping(self, WS: ClientWebSocketResponse, sender: bool = False):

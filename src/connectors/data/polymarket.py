@@ -1,11 +1,11 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import asyncpg, time
+import asyncio, time, re
 from bidict import bidict
 from typing import Any, Dict, ClassVar
-from pandas import Timestamp, Timedelta
 from aiohttp import ClientWebSocketResponse
+from pandas import Series, Timestamp, Timedelta
 from src.connectors.venues import Polymarket
-from src.connectors.ws import Connector, DataConnectorWS, DataChannelWS
+from src.connectors.ws import Channel, DataConnectorWS, DataChannelWS
 from src.models import Tick, Candle, TimeFrame
 from src.utils import Log, Postgres, Redis, TZ
 
@@ -19,50 +19,47 @@ class DataPolymarket(DataConnectorWS, Polymarket):
     
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self): super().__init__(
-        ticks = DataChannelWS(name = "ticks",
-            get_subs = self.get_subs, on_message = self.on_ticks,
-            on_ping = self.on_ping, url_args = self.get_url_ticks),
+        ticks = DataChannelWS(name = "ticks", get_sub_payloads = self.get_sub_payloads,
+          on_message = self.on_ticks, on_ping = self.on_ping, url_args = self.get_url_ticks),
         )
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
         name = f"{self.name}/redis_updater"
         self._procs[name] = self.Event.redis_updater(self.try_resub)
-        self._crons[self.shift_keys] = Timedelta(seconds = self.Event.MIN_UPD_FREQ)
+        self._crons[self.update_event] = Timedelta(seconds = self.Event.MIN_UPD_FREQ)
+        self._shifted_keys = asyncio.Event()
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def shift_keys(self):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update_event(self):
         start_at = time.time()
         self.Event.shift_keys()
         delay = (time.time() - start_at) * 1e6
         Log.info(f"Keys shifted... delay: {delay:.0f} μs...")
+        self._shifted_keys.set()
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def try_resub(self, stream: str, payload: dict, mid: str):
+    async def try_resub(self, stream: str, mid: str, payload: dict):
+        payload.pop("dus2", None)
+        await self._shifted_keys.wait()
+        self.Event.MAP = bidict(payload)
+        if not self.debug: verbose = str.join(", ", sorted(self.Event.MAP))
+        else: verbose = str.join("\n => ", [f"{K}: {V}" for K, V in self.Event.MAP.items()])
+        Log.debug(f"About to resubscribe to:\n => {verbose}")
         self._WS_to_resub.set()
-        if self.debug: Log.debug(
-            "About to resubscribe to:\n => "
-            + str.join(", ", sorted(payload)))
-    
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Postgres.on_table(DataConnectorWS.TABLE_CONFIG)
-    async def reconfig(self, conn: asyncpg.Connection,
-              venue: str = None, sources: set = None):
-        await Connector.reconfig(self, conn, venue)
-        sources = "({})".format(str.join("|", self.sources))
-        await self.update_specs(conn, venue, sources)
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def get_subs(self, subs: set[str], is_sub: bool):
-        subs_current = set(self.Event.MAP.values())
-        if is_sub: subs_due = subs_current.difference(subs)
-        else: subs_due = subs.difference(subs_current)
-        payload = {"assets_ids": sorted(subs_due), "channels": ["book"], 
-                  "operation": "SUBSCRIBE" if is_sub else "UNSUBSCRIBE"}
-        if not subs:
-            payload.pop("operation")
-            payload.update(self.DEFAULT_PAYLOAD)
-            print("PAYLOAD:", payload)
-        return subs_due, [payload]
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def get_sub_payloads(self, sources: set[str], action: Channel.Action):
+        regex: re.Pattern = re.compile("({})".format(str.join("|", sources)))
+        subs_due = Series(self.Event.MAP.inv).map(regex.match).dropna().index
+        payload = {"channels": ["book"], "assets_ids": subs_due.tolist()}
+        if (action == Channel.Action.UNSUB):
+            payload["operation"] = "UNSUBSCRIBE"
+        else:
+            payload["operation"] = "SUBSCRIBE"
+            if (action == Channel.Action.INIT):
+                payload.update(self.DEFAULT_PAYLOAD)
+        return set(subs_due), [payload]
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def get_url_headers(self, path: str):
@@ -77,7 +74,6 @@ class DataPolymarket(DataConnectorWS, Polymarket):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Redis.stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_ticks(self, data: Dict):
-
         template = [{"price": 0.0, "size": 0.0}]
         if not isinstance(data, list): data = [data]
         for entry in data:
