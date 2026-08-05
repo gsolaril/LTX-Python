@@ -1,5 +1,5 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import sys, asyncio, json, asyncpg, functools, enum
+import os, sys, psutil, asyncio, json, asyncpg, functools, enum, time
 from pandas import DataFrame, Timestamp, Timedelta
 from typing import Any, Callable, ClassVar, Iterable
 from collections import deque
@@ -17,7 +17,7 @@ asyncio.set_event_loop(EventLoop)
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class PostgresManager:
-    _QUERY = """
+    _QUERY_NOTIFY = """
       CREATE OR REPLACE FUNCTION notify_{0}() RETURNS trigger AS $$ BEGIN
           PERFORM pg_notify('{0}', json_build_object('operation', TG_OP,
           'table', TG_TABLE_NAME, 'time', CURRENT_TIMESTAMP, 'query_tag',
@@ -47,8 +47,9 @@ class PostgresManager:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, creds: Credentials = None):
         client = EventLoop.run_until_complete(self._create(creds))
+        self._conn: asyncpg.Connection = None
+        self._decorated = dict[str, dict]()
         self._client: asyncpg.Pool = client
-        self._to_listen = dict[str, Callable]()
         self._ready = asyncio.Event()
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def wait(self):
@@ -56,57 +57,114 @@ class PostgresManager:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def _queue_handler(self, _conn, _pid, _channel, payload):
         self._queue.put_nowait(payload)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def _decorator_base(self, make_listener: Callable, table: Any):
+        def decorator(func: Callable):
+            owner = func.__qualname__.rsplit(".", 1)[0]
+            key = table.value if isinstance(table, self.Table) else (
+                table if isinstance(table, str) else None)
+            self._decorated.setdefault(owner, {})[key] = make_listener(func, table)
+            return func
+        return decorator
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def on_table_base(self, table: Any):
+        def make_listener(func: Callable, _table: Any):
+            async def listener(src: Any):
+                return await func(src)
+            return listener
+        return self._decorator_base(make_listener, table)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def on_table_config(self, table: Any = None):
+        def make_listener(func: Callable, decorated_table: Any):
+            async def listener(src: Any):
+                t = decorated_table if isinstance(decorated_table, self.Table) \
+                    else getattr(src, "TABLE_CONFIG", None)
+                if not isinstance(t, self.Table):
+                    return Log.error(f"No TABLE_CONFIG for \"{type(src).__name__}\"")
+                if src._conn is None:
+                    return Log.error(f"No Postgres conn on \"{type(src).__name__}\"")
+                query = f"SELECT * FROM {t.value} WHERE (name = '{src.name}');"
+                row = await src._conn.fetchrow(query)
+                if (row is None): return Log.error(
+                    f"No config found for \"{src.name}\":\n => {query}")
+                config = dict(row)
+                if "sources" in config:
+                    sources: dict = json.loads(config.pop("sources"))
+                    config["sources"] = {S for S, V in sources.items() if V}
+                return await func(src, config = config)
+            return listener
+        return self._decorator_base(make_listener, table)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def _get_listeners(self, src: Any):
+        listeners = dict[str, Callable]()
+        mro = type(src).mro()
+        mro_names = {C.__name__ for C in mro}
+        for owner in list(self._decorated):
+            if owner not in mro_names: self._decorated.pop(owner)
+        for cls in mro:  # most specific first
+            for table, func in self._decorated.get(cls.__name__, {}).items():
+                if table is None:
+                    t = getattr(src, "TABLE_CONFIG", None)
+                    if not isinstance(t, self.Table): continue
+                    table = t.value
+                if table not in listeners: listeners[table] = func
+        return listeners
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def __call__(self, src: Any):
-        conn = await self._client.acquire()
-        self._queue = Queue(maxsize = src.maxlen)
-        verbose = "Postgres listeners started:"
-        for func in self._to_listen.values():
-            await func(src, conn)
-        for table, func in self._to_listen.items():
-            await conn.execute(self._QUERY.format(table))
-            await conn.add_listener(table, self._queue_handler)
-            verbose += f"\n => \"{table}\": \"{func.__name__}\""
-        Log.success(verbose)
-        self._ready.set()
-        while True:
-            try:
-                table = json.loads(await self._queue.get())["table"]
-                if (func := self._to_listen.get(table)) is None: continue
-                async with self._client.acquire() as conn: await func(src, conn)
-            except Exception as EXC: Log.exception(EXC); return conn.close()
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def on_table(self, table: Table):
-        def noop(func: Callable): return func
-        def decorator(func: Callable):
-            @functools.wraps(func)
-            async def wrapped(*args, **kwargs):
-                return await func(*args, **kwargs)
-            self._to_listen[table.value] = wrapped
-            return wrapped
-        if not isinstance(table, self.Table): return noop
-        else: return decorator
+        self._queue = Queue(maxsize = 10)
+        listeners = self._get_listeners(src)
+        async with self._client.acquire() as self._conn:
+            async with self._client.acquire() as src._conn:
+                try: [await func(src) for func in listeners.values()]
+                except Exception as EXC: Log.exception(EXC); raise EXC
+
+                try:
+                    verbose = ["Postgres listeners started:"]
+                    for table, func in listeners.items():
+                        await self._conn.execute(self._QUERY_NOTIFY.format(table))
+                        await self._conn.add_listener(table, self._queue_handler)
+                        verbose.append(f"\"{table}\": \"{func.__qualname__}\"")
+                    Log.success(str.join("\n => ", verbose))
+                except Exception as EXC: Log.exception(EXC); raise EXC
+
+                self._ready.set()
+                while src.active:
+                    try:
+                        response = json.loads(await self._queue.get())
+                        func = listeners.get(response["table"], None)
+                        if (func is not None): await func(src)
+                    except Exception as EXC: Log.exception(EXC); break
+
+            for table in listeners:
+                await self._conn.remove_listener(
+                    table, self._queue_handler)
+                
+        self._conn = None
+        src._conn = None
 
 #███████████████████████████████████████████████████████████████████████████████████████████
-#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class RedisManager:
-    PRINT_LIMIT = 50
-    GROUP: list[str] = {"MONITOR": "$", "STRATEGY": "$"}
+    VERBOSE_PERF = "Process \"{name}\" took {dus} μs, {cpu}% CPU, {ram}B RAM"
     VERBOSE_ERROR = "\"{}\" XADD failed:\n => {}"
     VERBOSE_XADD = "[Q{}] \"{}\" XADD @ {} => {}"
     VERBOSE_CP = "Warning: Queue above {0:.0%}."
     STREAM_PREFIX: ClassVar[str] = "LTX"
     VERBOSE_QUEUE = "Queue is {:.0%} full!"
+    PRINT_LIMIT = 50
     CHECKPOINTS = {
         0.5: lambda value: Log.warning("Queue is {:.0%} full!".format(value)),
         0.8: lambda value: Log.warning("Queue is {:.0%} full!".upper().format(value)),
         0.95: lambda value: Log.critical("Queue is {:.0%} full!".upper().format(value)),
     }
+    SEP = "|"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class Group(enum.StrEnum):
-        MONITOR: str = "$"
-        STRATEGY: str = "$"
+        DATA, MONITOR, EXEC = "$", "$", "$"
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    class StreamGet(enum.StrEnum):
+        ALL, NEW, LAST = "0-0", ">", "$"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def _create(cls, creds: Credentials = None):
@@ -114,7 +172,7 @@ class RedisManager:
         host, port = creds.IP.split(":")
         tstr = Timestamp.now(TZ).strftime("%Y%m%d%H%M%S%f")
         args = {"decode_responses": True, "host": host, "port": int(port),
-            "username": creds.USERNAME, "password": creds.PASSWORD, "db": 0}
+          "username": creds.USERNAME, "password": creds.PASSWORD, "db": 0}
         client = RedisClient(**args)
         query_1, query_2 = f"SET test {tstr}", f"GET test"
         assert (await client.execute_command(query_1) == "OK")
@@ -128,24 +186,40 @@ class RedisManager:
         self._ready = asyncio.Event()
         self._streams = set[str]()
         self._ncp = 0.0
+        self._queue = None
+        self._pending = deque()
+        self._proc = psutil.Process(os.getpid())
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def _enqueue(self, payload: dict):
+        if self._queue is not None:
+            self._queue.put_nowait(payload)
+        else: self._pending.append(payload)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def scan(self, pattern: str = STREAM_PREFIX + "|*"):
         async for K in self._client.scan_iter(pattern): yield K
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def xreadgroup(self, src: Any, group: Group,
-            streams: dict[str, str], *args, **kwargs):
-        consumer = src.__class__.__name__
-        if src.name: consumer += "|" + src.name
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def xread(self, src: Any, streams: dict[str, str],
+                    group: Group = None, *args, **kwargs):
         kwargs.setdefault("count", 100)
         kwargs.setdefault("block", 1000)
-        return await self._client.xreadgroup(group.name,
-                      consumer, streams, *args, **kwargs)
+        if group is not None:
+            consumer = src.__class__.__name__
+            if src.name: consumer += "|" + src.name
+            return await self._client.xreadgroup(
+                        group.name, consumer, streams, *args, **kwargs)
+        else: return await self._client.xread(streams, *args, **kwargs)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def xrecent(self, xstreams: set[str], n: int = 1):
+        for stream in xstreams:
+            for mid, payload in await self._client.xrevrange(
+              stream, count = n): yield stream, mid, payload
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def xack(self, group: Group, stream: str, message_id: str):
+    async def xack(self, stream: str, group: Group, message_id: str):
         return await self._client.xack(stream, group.name, message_id)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def ensure_groups(self, streams: list[str]):
-        for stream in streams:
+    async def ensure_groups(self, xstreams: set[str]):
+        for stream in xstreams:
             if stream in self._streams: continue
             mkstream = not await self._client.exists(stream)
             await self.xcreategroups(stream, mkstream = mkstream)
@@ -159,10 +233,10 @@ class RedisManager:
                 if "BUSY" not in str(EXC):
                     Log.exception(EXC); raise
             mkstream = False
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def add_streams(self, streams: list[str], src: Any):
-        for stream in streams:
-            stream = str.join("|", [self.STREAM_PREFIX, src.STREAM_PREFIX, stream])
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def add_streams(self, streams: list[str]):
+        for suffix in streams:
+            stream = self.STREAM_PREFIX + self.SEP + suffix
             if stream in self._streams: continue
             mkstream = not await self._client.exists(stream)
             await self.xcreategroups(stream, mkstream = mkstream)
@@ -177,26 +251,49 @@ class RedisManager:
         self._reporter.close_batch()
         report = self._reporter.to_string(next_at)
         if report: Log.info("Redis' " + report)
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def on_stream(self, func: Callable = None):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def stream(self, func: Callable = None):
         def decorator(func: Callable):
             @functools.wraps(func)
-            async def wrapped(*args, **kwargs):
-                gen = func(*args, **kwargs)
+            async def wrapped(src, *args, **kwargs):
+                gen = func(src, *args, **kwargs)
                 results = deque()
                 async for obj in gen:
                     results.append(obj)
                     if (obj is None): continue
                     payload: dict = obj.__dict__
-                    self._queue.put_nowait(payload)
+                    payload["stream"] = src.STREAM_PREFIX + self.SEP + payload["stream"]
+                    self._enqueue(payload)
                 return results
+            return wrapped
+        if func is None: return decorator
+        return decorator(func)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def profiler(self, func: Callable = None, log: bool = False):
+        def decorator(func: Callable):
+            @functools.wraps(func)
+            async def wrapped(src, *args, **kwargs):
+                payload = dict()
+                s_time = int(time.time() * 1e6)
+                d_cpu = self._proc.cpu_percent()
+                d_ram = self._proc.memory_info().rss
+                result = await func(src, *args, **kwargs)
+                payload["ram"] = self._proc.memory_info().rss - d_ram
+                payload["cpu"] = self._proc.cpu_percent() - d_cpu
+                payload["dus"] = int(time.time() * 1e6) - s_time
+                stream = "PERF" + self.SEP + (name := src.name + self.SEP + func.__name__)
+                self._enqueue({"stream": stream, "time_event": s_time, "payload": payload})
+                if log: Log.info(self.VERBOSE_PERF.format(name = name, **payload))
+                return result
             return wrapped
         if func is None: return decorator
         return decorator(func)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def __call__(self, src: Any):
-        self._queue = Queue(maxsize = src.maxlen,
+        self._queue = Queue(maxsize = src.maxlen_redis,
             checkpoints = self.CHECKPOINTS.copy())
+        while self._pending:
+            self._queue.put_nowait(self._pending.popleft())
         self._ready.set()
         while src.active:
             while (N := self._queue.qsize()) == 0:
@@ -204,15 +301,50 @@ class RedisManager:
             else:
                 try:
                     payload: dict = await self._queue.get()
-                    suffix, time, payload = payload.values()
-                    id = str(time)[: -3] + "-" + str(time)[-3 :]
-                    stream = str.join("|", [self.STREAM_PREFIX, src.STREAM_PREFIX, suffix])
-                    if stream not in self._streams: await self.add_streams([suffix], src)
-                    assert (await self._client.xadd(stream, payload, id, src.maxlen))
+                    suffix, time_event, payload = payload.values()
+                    stream = self.STREAM_PREFIX + self.SEP + suffix
+                    id = str(time_event)[: -3] + "-" + str(time_event)[-3 :]
+                    if suffix not in self._streams: await self.add_streams([suffix])
+                    payload["qdus"] = int(time.time() * 1e6 - time_event)
+                    assert (await self._client.xadd(stream, payload, id, src.maxlen_redis))
                     if src.debug: Log.debug(self.VERBOSE_XADD.format(N, stream, id, payload))
                     self._reporter.add(suffix)
-                except Exception as EXC: Log.error(
-                    self.VERBOSE_ERROR.format(stream, payload), EXC)
+                except Exception as EXC:
+                    Log.exception(EXC)
+    
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def consume(self, func: Callable,
+      src: Any, xstreams: set, n: int = 0):
+
+        name = f"\"{src.name}.{func.__name__}\" "
+        xstr = str.join("\n", map(" => \"{}\"".format, xstreams))
+        verbose = name + f"tracking X-Streams & {{0}}:\n" + xstr
+        xdict = dict.fromkeys(xstreams, src.XGROUP.value)
+      
+        if not n:
+            action = "ensuring groups"
+            Log.info(verbose.format(action))
+            await self.ensure_groups(xstreams)
+        elif isinstance(n, int) and (n > 0):
+            action = f"retrieving tail ({n})"
+            Log.info(verbose.format(action))
+            gen = self.xrecent(xstreams, n = n)
+            async for stream, mid, payload in gen:
+                await func(stream, mid, payload)
+
+        while True:
+            try:
+                response = await self.xread(src, xdict)
+                if not response: continue
+                for stream, messages in response:
+                    for mid, payload in messages:
+                        if not isinstance(payload, dict): continue
+                        await self.xack(stream, src.XGROUP, mid)
+                        try: await func(stream, mid, payload)
+                        except Exception as EXC: Log.exception(EXC)
+
+            except asyncio.CancelledError: break
+            except Exception as EXC: Log.exception(EXC); break
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -317,16 +449,16 @@ except Exception as EXC: Log.exception(EXC); sys.exit(1)
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 if __name__ == "__main__":
 
-    @PostgresManager.on_table("test_postgres_listener")
-    async def on_notify_1(conn: asyncpg.Connection):
+    @PostgresManager.on_table_base("test_postgres_listener")
+    async def on_notify_1(src):
         query = "SELECT * FROM test_postgres_listener"
-        table = DataFrame(map(dict, await conn.fetch(query)))
+        table = DataFrame(map(dict, await src._conn.fetch(query)))
         print("table:"), print(table)
 
-    @PostgresManager.on_table("accounts")
-    async def on_notify_2(conn: asyncpg.Connection):
+    @PostgresManager.on_table_base("accounts")
+    async def on_notify_2(src):
         query = "SELECT * FROM accounts"
-        table = DataFrame(map(dict, await conn.fetch(query)))
+        table = DataFrame(map(dict, await src._conn.fetch(query)))
         print("table:"), print(table)
 
     async def main():

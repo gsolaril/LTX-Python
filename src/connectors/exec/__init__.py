@@ -1,9 +1,16 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-from .data import agents as agents_data
-from .exec import agents as agents_exec
-from .venues import agents as agents_misc
+import pathlib
+#from .binance import BinanceUsdm, BinanceCoin, BinanceSpot
+from .polymarket import ExecPolymarket
 
-agents = {**agents_data, **agents_exec, **agents_misc}
-__all__ = ["agents"]
+__all__ = list[str]()
+
+folder = pathlib.Path(__file__).parent
+prefix = str.join("-", [folder.parent.stem, folder.stem, ""])
+
+# classes = [BinanceUsdm, BinanceCoin, BinanceSpot, Polymarket]
+classes = [ExecPolymarket]
+agents = {prefix + str.lower(getattr(cls, "VENUE")): cls for cls in classes}
+__all__.append("agents")
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 #███████████████████████████████████████████████████████████████████████████████████████████

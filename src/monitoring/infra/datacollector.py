@@ -14,7 +14,7 @@ from src.utils import *
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataCollector(StreamingAgent):
-    maxlen: int = field(init = False, kw_only = True, default = 500000)
+    maxlen_local: int = field(init = False, kw_only = True, default = 500000)
     batch_size: int = field(init = False, kw_only = True, default = 100000)
     freq_write_batch: int = field(init = False, kw_only = True, default = 5)
     freq_write_report: int = field(init = False, kw_only = True, default = 60)
@@ -23,14 +23,15 @@ class DataCollector(StreamingAgent):
     TABLE_CONFIG: ClassVar[Postgres.Table] = Postgres.Table.MONITORING
     TS_CANDLES: ClassVar[ClickHouse.Table] = ClickHouse.Table.CANDLES
     TS_TICKS: ClassVar[ClickHouse.Table] = ClickHouse.Table.TICKS
+    XGROUP: ClassVar[str] = Redis.Group.MONITOR
     STREAM_PREFIX: ClassVar[str] = "DATA"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
         self._xstreams = dict[str, str]()
         self._queues: dict[str, asyncio.Queue] = {
-            Tick: asyncio.Queue(maxsize = self.maxlen),
-            Candle: asyncio.Queue(maxsize = self.maxlen)}
+            Tick: asyncio.Queue(maxsize = self.maxlen_local),
+            Candle: asyncio.Queue(maxsize = self.maxlen_local)}
         self._crons[self.scan] = Timedelta(seconds = self.freq_scan)
         self._crons[self.write_batch] = Timedelta(seconds = self.freq_write_batch)
         self._crons[self.write_report] = Timedelta(seconds = self.freq_write_report)
@@ -38,14 +39,8 @@ class DataCollector(StreamingAgent):
         self._reporter = Reporter(name = "DataCollector")
         self._scan_ready = asyncio.Event()
         self._recorded: DataFrame = None
+        self._procs["main"] = self.main
         self.config_verbose()
- 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def setup(self):
-        tasks = await super().setup()
-        tasks.append(asyncio.create_task(
-            self.main(), name = f"{self.name}/main"))
-        return tasks
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def write(self, queue: asyncio.Queue):
@@ -124,11 +119,11 @@ class DataCollector(StreamingAgent):
             tf = str.split(stream, "|")[-1]
             if tf not in suffixes: continue
             if stream not in self._xstreams:
-                self._xstreams[stream] = ">"
+                self._xstreams[stream] = Redis.StreamGet.NEW.value
                 new.add(stream)
         self._scan_ready.set()
         if self._xstreams:
-            await Redis.ensure_groups(list(self._xstreams))
+            await Redis.ensure_groups(self._xstreams)
         if not new: return
         new_str = str.join(", ", sorted(new))
         Log.info(f"New streams:\n => {new_str}")
@@ -156,13 +151,12 @@ class DataCollector(StreamingAgent):
             obj = Tick(**payload)
             await self._queues[Tick].put(obj)
             
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def main(self):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def main(self, **kwargs):
         await self._scan_ready.wait()
         while True:
             try:
-                response = await Redis.xreadgroup(self,
-                    Redis.Group.MONITOR, self._xstreams)
+                response = await Redis.xread(self, self._xstreams)
                 if not response: continue
                 for stream, messages in response:
                     for message_id, payload in messages:
