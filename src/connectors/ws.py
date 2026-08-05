@@ -94,9 +94,9 @@ class DataConnectorWS(DataConnector):
         super().__post_init__()
         self._WS_to_resub = asyncio.Event()  # Trigger subscription methods of WebSocket objects, cron-based (Binance) or event-based (Polymarket).
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def reconfig(self, conn: asyncpg.Connection, sources: set[str]):
-        await super().reconfig(conn, sources)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self, sources: set[str]):
+        await super().reconfig(sources)
         self._WS_to_resub.set()
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -191,9 +191,9 @@ class ExecConnectorWS(ExecConnector):
         super().__post_init__()
         self._WS_to_resub = asyncio.Event()
         
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def reconfig(self, conn: asyncpg.Connection, sources: set[str]):
-        await super().reconfig(conn, sources)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self, sources: set[str]):
+        await super().reconfig(sources)
         self._WS_to_resub.set()
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

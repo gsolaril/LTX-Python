@@ -25,20 +25,14 @@ class ExecPolymarket(ExecConnector, Polymarket):
         self._crons[self.reconfig] = Timedelta(
               seconds = self.freq_redis_report)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def reconfig(self):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self, sources: set[str]):
         conn = await Postgres._client.acquire()
-        await self._reconfig(conn)
+        await self._reconfig(sources)
         self._crons[self.reconfig] = Timedelta(
               seconds = self.freq_redis_report)
-        await self.update_specs(conn, Polymarket.VENUE)
+        await self.update_specs(Polymarket.VENUE, sources)
         await conn.close()
-
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Postgres.on_table_config(ExecConnector.TABLE_CONFIG)
-    async def _reconfig(self, conn: asyncpg.Connection, config: dict = None):
-        Polymarket.Event.shift_keys(shift = 1)
-        await super().reconfig(conn, Polymarket.VENUE)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def sender(self, payload: dict, account_id: str, action: str):

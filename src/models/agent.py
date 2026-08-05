@@ -1,5 +1,6 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import asyncio, asyncpg, json, datetime
+import asyncio, json, datetime
+from asyncpg import Connection
 from collections import OrderedDict
 from typing import Any, ClassVar, Callable
 from dataclasses import dataclass, field
@@ -54,6 +55,10 @@ class BaseAgent:
             name = f"{self.name}/cron/{cron.__name__}/{tf}"
             tasks.append(asyncio.create_task(
                 self.start_cron(cron), name = name))
+        for name, process in self._procs.items():
+            process_name = f"{self.name}/{name}"
+            tasks.append(asyncio.create_task(
+              process(self), name = process_name))
         return tasks
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -116,6 +121,7 @@ class ControllableAgent(StreamingAgent):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
+        self._conn: Connection = None
         self._specs: dict[str, Symbol] = dict()
         self.sym_query: Callable = Symbol.QUERY_BY[self.SYM_QUERY_BY]
     
@@ -137,8 +143,8 @@ class ControllableAgent(StreamingAgent):
         return tasks
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Postgres.on_table_config(TABLE_CONFIG)#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def _reconfig(self, conn: asyncpg.Connection, config: dict[str, Any]):
+    @Postgres.on_table_config(TABLE_CONFIG)#█▄▄▄▄▄▄▄▄
+    async def _reconfig(self, config: dict[str, Any]):
         sources: set[str] = config.pop("sources", set())
         for key in self.FIELDS:
             if not key in config: continue
@@ -147,20 +153,20 @@ class ControllableAgent(StreamingAgent):
             freq = self.FREQ_REPORT_DEFAULT
             freq = getattr(self, "freq_redis_report", freq)
             self._crons[Redis.report] = Timedelta(seconds = freq)
-        await self.reconfig(conn, sources)
+        await self.reconfig(sources)
         self.last_updated = Timestamp.now(TZ)
         if hasattr(self, "sources"):
             self.sources = sources
         self.config_verbose()
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_specs(self, conn: asyncpg.Connection, venue: str, symbols: set[str]):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update_specs(self, venue: str, symbols: set[str]):
         query = f"SELECT * FROM {self.TABLE_SYMBOLS} WHERE (venue = '{venue}')"
         if (self.sym_query is not None): query = query + self.sym_query(symbols)
         if self.debug: Log.debug(f"Querying specs:\n => {query}")
-        result = [dict(row) for row in await conn.fetch(query)]
+        result = [dict(row) for row in await self._conn.fetch(query)]
         if not result: return Log.error(f"No specs found:\n => {query}")
         for item in result: self._specs[item["symbol"]] = Symbol(**item)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def reconfig(self, conn: asyncpg.Connection, sources: set[str]): ...
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self, sources: set[str]): ...

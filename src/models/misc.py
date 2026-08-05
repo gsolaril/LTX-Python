@@ -138,7 +138,7 @@ class Symbol(DBClass):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     QUERY_BY: ClassVar[dict[str, Callable]] = {
         "ALL": lambda A: "", "REGEX": lambda A: "\nAND (symbol ~ '({})')".format(str.join("|", A)),
-        "ARRAY": lambda A: "\nAND (symbol IN {})".format(str.join(", ", map("'{}'".format, A))) }
+        "ARRAY": lambda A: "\nAND (symbol IN ({}))".format(str.join(", ", map("'{}'".format, A))) }
     
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

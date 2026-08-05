@@ -196,18 +196,16 @@ class PolymarketGamma(Connector, Polymarket):
         Log.success(f"Got IDs... delay: {delay:.0f} μs...\n{verbose}")
         yield self.Event(time = time_event)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def reconfig(self, conn: asyncpg.Connection, sources: set):
-        await super().reconfig(conn, sources)
-        await self.update_specs(conn, self.VENUE, sources)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self, sources: set[str]):
+        await super().reconfig(sources)
+        await self.update_specs(self.VENUE, sources)
         self._crons[self.update_ids] = Timedelta(
                 seconds = self.freq_redis_report)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_ids(self, conn: asyncpg.Connection = None, sources: set = None):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update_ids(self):
         [*await self.get_ids()]
-        return
-
         query_id, query_exp = list[str](), list[str]()
         condition = "WHEN (symbol = '{0}') THEN '{1}'"
         line_upper = f"UPDATE {self.TABLE_SYMBOLS} SET"
@@ -227,5 +225,5 @@ class PolymarketGamma(Connector, Polymarket):
         query_exp.insert(0, TAB + "expiration = CASE")
         query_exp.append(TAB + "ELSE expiration END")
         query_lines = [line_upper, *query_id, *query_exp, line_lower]
-        n = (await conn.execute(str.join("\n", query_lines))).split(" ")[-1]
+        n = (await self._conn.execute(str.join("\n", query_lines))).split(" ")[-1]
         Log.info(f"Updated {n} Polymarket IDs in \"{self.TABLE_SYMBOLS}\"")

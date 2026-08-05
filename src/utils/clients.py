@@ -47,6 +47,7 @@ class PostgresManager:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, creds: Credentials = None):
         client = EventLoop.run_until_complete(self._create(creds))
+        self._conn: asyncpg.Connection = None
         self._decorated = dict[str, dict]()
         self._client: asyncpg.Pool = client
         self._ready = asyncio.Event()
@@ -68,28 +69,29 @@ class PostgresManager:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_table_base(self, table: Any):
         def make_listener(func: Callable, _table: Any):
-            async def listener(src: Any, conn: asyncpg.Connection):
-                return await func(src, conn)
+            async def listener(src: Any):
+                return await func(src)
             return listener
         return self._decorator_base(make_listener, table)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_table_config(self, table: Any = None):
         def make_listener(func: Callable, decorated_table: Any):
-            async def listener(src: Any, conn: asyncpg.Connection):
+            async def listener(src: Any):
                 t = decorated_table if isinstance(decorated_table, self.Table) \
                     else getattr(src, "TABLE_CONFIG", None)
                 if not isinstance(t, self.Table):
                     return Log.error(f"No TABLE_CONFIG for \"{type(src).__name__}\"")
-                name = src.name
-                query = f"SELECT * FROM {t.value} WHERE (name = '{name}');"
-                row = await conn.fetchrow(query)
-                if (row is None):
-                    return Log.error(f"No config found for \"{name}\":\n => {query}")
+                if src._conn is None:
+                    return Log.error(f"No Postgres conn on \"{type(src).__name__}\"")
+                query = f"SELECT * FROM {t.value} WHERE (name = '{src.name}');"
+                row = await src._conn.fetchrow(query)
+                if (row is None): return Log.error(
+                    f"No config found for \"{src.name}\":\n => {query}")
                 config = dict(row)
                 if "sources" in config:
                     sources: dict = json.loads(config.pop("sources"))
                     config["sources"] = {S for S, V in sources.items() if V}
-                return await func(src, conn, config = config)
+                return await func(src, config = config)
             return listener
         return self._decorator_base(make_listener, table)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -110,23 +112,35 @@ class PostgresManager:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def __call__(self, src: Any):
         self._queue = Queue(maxsize = 10)
-        conn = await self._client.acquire()
         listeners = self._get_listeners(src)
-        verbose = "Postgres listeners started:"
-        for func in listeners.values():
-            await func(src, conn)
-        for table, func in listeners.items():
-            await conn.execute(self._QUERY_NOTIFY.format(table))
-            await conn.add_listener(table, self._queue_handler)
-            verbose += f"\n => \"{table}\": \"{func.__qualname__}\""
-        Log.success(verbose)
-        self._ready.set()
-        while True:
-            try:
-                table = json.loads(await self._queue.get())["table"]
-                if (func := listeners.get(table)) is None: continue
-                async with self._client.acquire() as conn: await func(src, conn)
-            except Exception as EXC: Log.exception(EXC); return conn.close()
+        async with self._client.acquire() as self._conn:
+            async with self._client.acquire() as src._conn:
+                try: [await func(src) for func in listeners.values()]
+                except Exception as EXC: Log.exception(EXC); raise EXC
+
+                try:
+                    verbose = ["Postgres listeners started:"]
+                    for table, func in listeners.items():
+                        await self._conn.execute(self._QUERY_NOTIFY.format(table))
+                        await self._conn.add_listener(table, self._queue_handler)
+                        verbose.append(f"\"{table}\": \"{func.__qualname__}\"")
+                    Log.success(str.join("\n => ", verbose))
+                except Exception as EXC: Log.exception(EXC); raise EXC
+
+                self._ready.set()
+                while src.active:
+                    try:
+                        response = json.loads(await self._queue.get())
+                        func = listeners.get(response["table"], None)
+                        if (func is not None): await func(src)
+                    except Exception as EXC: Log.exception(EXC); break
+
+            for table in listeners:
+                await self._conn.remove_listener(
+                    table, self._queue_handler)
+                
+        self._conn = None
+        src._conn = None
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -413,15 +427,15 @@ except Exception as EXC: Log.exception(EXC); sys.exit(1)
 if __name__ == "__main__":
 
     @PostgresManager.on_table_base("test_postgres_listener")
-    async def on_notify_1(conn: asyncpg.Connection):
+    async def on_notify_1(src):
         query = "SELECT * FROM test_postgres_listener"
-        table = DataFrame(map(dict, await conn.fetch(query)))
+        table = DataFrame(map(dict, await src._conn.fetch(query)))
         print("table:"), print(table)
 
     @PostgresManager.on_table_base("accounts")
-    async def on_notify_2(conn: asyncpg.Connection):
+    async def on_notify_2(src):
         query = "SELECT * FROM accounts"
-        table = DataFrame(map(dict, await conn.fetch(query)))
+        table = DataFrame(map(dict, await src._conn.fetch(query)))
         print("table:"), print(table)
 
     async def main():

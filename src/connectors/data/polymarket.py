@@ -80,6 +80,8 @@ class DataPolymarket(DataConnectorWS, Polymarket):
             if not isinstance(entry, dict): continue
             event = entry.get("event_type", None)
             if (event != "book"): continue
+            #print(data)
+            #raise KeyboardInterrupt
             id = entry.get("asset_id", None)
             tse = entry.get("timestamp", None)
             if id is None or tse is None: continue

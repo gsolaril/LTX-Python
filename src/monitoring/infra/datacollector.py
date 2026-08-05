@@ -39,14 +39,8 @@ class DataCollector(StreamingAgent):
         self._reporter = Reporter(name = "DataCollector")
         self._scan_ready = asyncio.Event()
         self._recorded: DataFrame = None
+        self._procs["main"] = self.main
         self.config_verbose()
- 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def setup(self):
-        tasks = await super().setup()
-        tasks.append(asyncio.create_task(
-            self.main(), name = f"{self.name}/main"))
-        return tasks
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def write(self, queue: asyncio.Queue):
@@ -157,8 +151,8 @@ class DataCollector(StreamingAgent):
             obj = Tick(**payload)
             await self._queues[Tick].put(obj)
             
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def main(self):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def main(self, **kwargs):
         await self._scan_ready.wait()
         while True:
             try:

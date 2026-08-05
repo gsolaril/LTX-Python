@@ -101,24 +101,15 @@ class Connector(ControllableAgent):
               maxlen = 60, ignore_tfs = self.IGNORE_TFS.copy())
         self._crons[self._bundle.resample] = TimeFrame.MIN.value
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def setup(self):
-        tasks = await super().setup()
-        for name, process in self._procs.items():
-            process_name = f"{self.name}/{name}"
-            tasks.append(asyncio.create_task(
-              process(self), name = process_name))
-        return tasks
-
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def local_to_stream(self, sources: set[str]): ...
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def reconfig(self, conn: asyncpg.Connection, sources: set[str]):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self, sources: set[str]):
         if (sources_old := self.sources.difference(sources)):
             self._sources_old = {K: sources_old.copy() for K in self._sources_old}
         if (sources_new := sources.difference(self.sources)):
             self._sources_new = {K: sources_new.copy() for K in self._sources_new}
-        await self.update_specs(conn, self.VENUE, sources)
+        await self.update_specs(self.VENUE, sources)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -137,9 +128,9 @@ class DataConnector(Connector):
             for tf in TimeFrame: stream_names.add(
                 Quote.STREAM_KEY.format(**kw, tf = tf.name))
         return stream_names
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def reconfig(self, conn: asyncpg.Connection, sources: set[str]):
-        await super().reconfig(conn, sources)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self, sources: set[str]):
+        await super().reconfig(sources)
         streams = self.local_to_stream(sources)
         await Redis.add_streams(streams, self)
 
@@ -175,9 +166,9 @@ class ExecConnector(Connector):
                     symbol = "NAV", tf = tf.name)
                 stream_names.add(stream_name)
         return stream_names
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def reconfig(self, conn: asyncpg.Connection, sources: set[str]):
-        await super().reconfig(conn, sources)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self, sources: set[str]):
+        await super().reconfig(sources)
         streams = self.local_to_stream(sources)
         await Redis.add_streams(streams, self)
 
