@@ -7,7 +7,11 @@ from dataclasses import dataclass, field
 from pandas import Timestamp, Timedelta
 from loguru import logger as Log
 from .misc import Symbol, TimeFrame
+from .data import Quote, Balance
+from .order import Response
 from src.utils import Postgres, Redis, TZ
+
+STREAMABLE_TYPES = [Quote, Response, Balance]
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -95,8 +99,19 @@ class BaseAgent:
 class StreamingAgent(BaseAgent):
     maxlen_redis: int = field(init = False, kw_only = True, default = 10000)
     freq_redis_report: int = field(init = False, kw_only = True, default = 600)
+    STREAM_FORMAT: ClassVar[dict[str, Any]] = dict.fromkeys(STREAMABLE_TYPES)
     STREAM_PREFIX: ClassVar[str] = ...
     XGROUP: ClassVar[str] = ...
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if not hasattr(cls, "STREAM_PREFIX"): return
+        if (cls.STREAM_PREFIX is Ellipsis): return
+        for model in cls.STREAM_FORMAT.keys():
+            stream_key = getattr(model, "STREAM_KEY")
+            cls.STREAM_FORMAT[model] = cls.STREAM_PREFIX + Redis.SEP + stream_key
+
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def setup(self):
         tasks = list[asyncio.Task]()
@@ -142,10 +157,9 @@ class ControllableAgent(StreamingAgent):
         tasks.extend(await super().setup())
         return tasks
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Postgres.on_table_config(TABLE_CONFIG)#█▄▄▄▄▄▄▄▄
-    async def _reconfig(self, config: dict[str, Any]):
-        sources: set[str] = config.pop("sources", set())
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Redis.profiler#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def _reconfig_base(self, config: dict[str, Any]):
         for key in self.FIELDS:
             if not key in config: continue
             setattr(self, key, config[key])
@@ -153,13 +167,20 @@ class ControllableAgent(StreamingAgent):
             freq = self.FREQ_REPORT_DEFAULT
             freq = getattr(self, "freq_redis_report", freq)
             self._crons[Redis.report] = Timedelta(seconds = freq)
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Postgres.on_table_config(TABLE_CONFIG)#█▄▄▄▄▄▄▄▄
+    async def _reconfig(self, config: dict[str, Any]):
+        sources: set[str] = config.pop("sources", set())
+        await self._reconfig_base(config)
         await self.reconfig(sources)
         self.last_updated = Timestamp.now(TZ)
         if hasattr(self, "sources"):
             self.sources = sources
         self.config_verbose()
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Redis.profiler#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update_specs(self, venue: str, symbols: set[str]):
         query = f"SELECT * FROM {self.TABLE_SYMBOLS} WHERE (venue = '{venue}')"
         if (self.sym_query is not None): query = query + self.sym_query(symbols)

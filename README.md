@@ -1,11 +1,8 @@
 [To be written soon...]
 
 Next steps:
-* (08/04) PostgresManager context manager calling "asyncpg.Connector.acquire"
-* (08/06) individual function profiling decorator "Redis.profiler" - extending Redis.stream
 * (08/07) incremental orderbook needed for Polymarket tick data (i.e.: bid/ask volumes)
 * (08/09) MetaTrader misc connector (REST / tokens to Redis) - similar to PolymarketGamma
-* ()
 * (08/10) MetaTrader data connector (WS)
 * (08/11) MetaTrader exec connector (REST)
 * (08/16) Polymarket exec connector (REST)

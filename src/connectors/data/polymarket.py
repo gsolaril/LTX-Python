@@ -32,10 +32,7 @@ class DataPolymarket(DataConnectorWS, Polymarket):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def update_event(self):
-        start_at = time.time()
         self.Event.shift_keys()
-        delay = (time.time() - start_at) * 1e6
-        Log.info(f"Keys shifted... delay: {delay:.0f} μs...")
         self._shifted_keys.set()
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

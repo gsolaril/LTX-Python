@@ -37,8 +37,9 @@ class Polymarket(Venue):
         @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def __dict__(self): return {"stream": self.STREAM_KEY,
               "time": self.time_us, "payload": dict(self.MAP)}
-        #▄▄▄▄▄▄▄▄▄▄▄▄▄
-        @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+        #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+        @Redis.profiler(log = True)
+        @classmethod
         def shift_keys(cls, shift: int = 1):
             min_tf = cls.MIN_UPD_TF.name
             new_map: bidict[str, str] = bidict()
@@ -196,14 +197,15 @@ class PolymarketGamma(Connector, Polymarket):
         Log.success(f"Got IDs... delay: {delay:.0f} μs...\n{verbose}")
         yield self.Event(time = time_event)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Redis.profiler#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def reconfig(self, sources: set[str]):
         await super().reconfig(sources)
-        await self.update_specs(self.VENUE, sources)
         self._crons[self.update_ids] = Timedelta(
                 seconds = self.freq_redis_report)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Redis.profiler(log = True)
     async def update_ids(self):
         [*await self.get_ids()]
         query_id, query_exp = list[str](), list[str]()

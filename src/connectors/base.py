@@ -72,6 +72,7 @@ class Venue:
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class StreamingBundle(Bundle):
+    STREAM_PREFIX: ClassVar[str] = "DATA"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Redis.stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def resample(self, time: Timestamp = None):
@@ -124,15 +125,15 @@ class DataConnector(Connector):
         for symbol in sources:
             kw["symbol"] = symbol
             stream_names.add(
-                Quote.STREAM_KEY.format(**kw, tf = "T1"))
+                str.format(self.STREAM_FORMAT[Quote], **kw, tf = "T1"))
             for tf in TimeFrame: stream_names.add(
-                Quote.STREAM_KEY.format(**kw, tf = tf.name))
+                str.format(self.STREAM_FORMAT[Quote], **kw, tf = tf.name))
         return stream_names
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def reconfig(self, sources: set[str]):
         await super().reconfig(sources)
         streams = self.local_to_stream(sources)
-        await Redis.add_streams(streams, self)
+        await Redis.add_streams(streams)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -160,17 +161,18 @@ class ExecConnector(Connector):
         stream_names = set[str]()
         for account in sources:
             kw["account_id"] = account
-            stream_names.add(Response.STREAM_KEY.format(**kw))
-            for tf in TimeFrame:
-                stream_name = Balance.STREAM_KEY.format(**kw,
-                    symbol = "NAV", tf = tf.name)
-                stream_names.add(stream_name)
+            stream_names.add(str.format(
+                self.STREAM_FORMAT[Response], **kw))
+            for tf in TimeFrame: stream_names.add(str.format(
+                self.STREAM_FORMAT[Balance], **kw,
+                symbol = "NAV", tf = tf.name))
+                
         return stream_names
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def reconfig(self, sources: set[str]):
         await super().reconfig(sources)
         streams = self.local_to_stream(sources)
-        await Redis.add_streams(streams, self)
+        await Redis.add_streams(streams)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def listen_orders(self):

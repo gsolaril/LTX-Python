@@ -1,5 +1,5 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import sys, asyncio, json, asyncpg, functools, enum, time
+import os, sys, psutil, asyncio, json, asyncpg, functools, enum, time
 from pandas import DataFrame, Timestamp, Timedelta
 from typing import Any, Callable, ClassVar, Iterable
 from collections import deque
@@ -146,6 +146,7 @@ class PostgresManager:
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class RedisManager:
+    VERBOSE_PERF = "Process \"{name}\" took {dus} μs, {cpu}% CPU, {ram}B RAM"
     VERBOSE_ERROR = "\"{}\" XADD failed:\n => {}"
     VERBOSE_XADD = "[Q{}] \"{}\" XADD @ {} => {}"
     VERBOSE_CP = "Warning: Queue above {0:.0%}."
@@ -187,6 +188,7 @@ class RedisManager:
         self._ncp = 0.0
         self._queue = None
         self._pending = deque()
+        self._proc = psutil.Process(os.getpid())
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def _enqueue(self, payload: dict):
@@ -231,10 +233,10 @@ class RedisManager:
                 if "BUSY" not in str(EXC):
                     Log.exception(EXC); raise
             mkstream = False
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def add_streams(self, streams: list[str], src: Any):
-        for stream in streams:
-            stream = str.join(self.SEP, [self.STREAM_PREFIX, src.STREAM_PREFIX, stream])
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def add_streams(self, streams: list[str]):
+        for suffix in streams:
+            stream = self.STREAM_PREFIX + self.SEP + suffix
             if stream in self._streams: continue
             mkstream = not await self._client.exists(stream)
             await self.xcreategroups(stream, mkstream = mkstream)
@@ -253,15 +255,36 @@ class RedisManager:
     def stream(self, func: Callable = None):
         def decorator(func: Callable):
             @functools.wraps(func)
-            async def wrapped(*args, **kwargs):
-                gen = func(*args, **kwargs)
+            async def wrapped(src, *args, **kwargs):
+                gen = func(src, *args, **kwargs)
                 results = deque()
                 async for obj in gen:
                     results.append(obj)
                     if (obj is None): continue
                     payload: dict = obj.__dict__
+                    payload["stream"] = src.STREAM_PREFIX + self.SEP + payload["stream"]
                     self._enqueue(payload)
                 return results
+            return wrapped
+        if func is None: return decorator
+        return decorator(func)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def profiler(self, func: Callable = None, log: bool = False):
+        def decorator(func: Callable):
+            @functools.wraps(func)
+            async def wrapped(src, *args, **kwargs):
+                payload = dict()
+                s_time = int(time.time() * 1e6)
+                d_cpu = self._proc.cpu_percent()
+                d_ram = self._proc.memory_info().rss
+                result = await func(src, *args, **kwargs)
+                payload["ram"] = self._proc.memory_info().rss - d_ram
+                payload["cpu"] = self._proc.cpu_percent() - d_cpu
+                payload["dus"] = int(time.time() * 1e6) - s_time
+                stream = "PERF" + self.SEP + (name := src.name + self.SEP + func.__name__)
+                self._enqueue({"stream": stream, "time_event": s_time, "payload": payload})
+                if log: Log.info(self.VERBOSE_PERF.format(name = name, **payload))
+                return result
             return wrapped
         if func is None: return decorator
         return decorator(func)
@@ -279,16 +302,16 @@ class RedisManager:
                 try:
                     payload: dict = await self._queue.get()
                     suffix, time_event, payload = payload.values()
+                    stream = self.STREAM_PREFIX + self.SEP + suffix
                     id = str(time_event)[: -3] + "-" + str(time_event)[-3 :]
-                    stream = str.join(self.SEP, [self.STREAM_PREFIX, src.STREAM_PREFIX, suffix])
-                    if stream not in self._streams: await self.add_streams([suffix], src)
-                    payload["dus2"] = int(time.time() * 1e6 - time_event)
+                    if suffix not in self._streams: await self.add_streams([suffix])
+                    payload["qdus"] = int(time.time() * 1e6 - time_event)
                     assert (await self._client.xadd(stream, payload, id, src.maxlen_redis))
                     if src.debug: Log.debug(self.VERBOSE_XADD.format(N, stream, id, payload))
                     self._reporter.add(suffix)
                 except Exception as EXC:
                     Log.exception(EXC)
-        
+    
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def consume(self, func: Callable,
       src: Any, xstreams: set, n: int = 0):

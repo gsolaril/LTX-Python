@@ -6,7 +6,7 @@ from hvac import Client as VaultClient
 from pathlib import Path
 from subprocess import Popen
 from typing import NamedTuple
-from .logger import Log, LokiClient
+from .logger import Log, LOG_ARGS, LokiClient
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -14,7 +14,6 @@ _FOLDER_UTILS = Path(__file__).parent
 _FOLDER_ROOT = _FOLDER_UTILS.parent.parent
 _FOLDER_LOG = _FOLDER_ROOT / "logs"
 _FOLDER_SRC = _FOLDER_ROOT / "src"
-STARTUP_ERRORS = list()
 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class Config(NamedTuple):
@@ -29,6 +28,9 @@ class Config(NamedTuple):
     def __repr__(self): return str.join("\n => ",
         [f"{K}: {V}" for K, V in self._asdict().items()])
 
+#███████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
 _PATH_CONFIG = _FOLDER_ROOT / "config.json"
 try:
     with open(_PATH_CONFIG, "r") as file:
@@ -38,7 +40,17 @@ except Exception as EXC:
     verbose = f"Error reading \"{_PATH_CONFIG}\":"
     verbose += f"\n => ({EXC.__class__.__name__}) {EXC}"
     verbose += f"\n => Will use default config."
-    STARTUP_ERRORS.append(verbose)
+    Log.error(verbose)
+
+if Config.LOG_TO_FILE:
+    sink = str(Config.FOLDER_ROOT) + "/logs/" + LokiClient.LOGFILE_FORMAT
+    Log.add(**LOG_ARGS, sink = sink, format = LokiClient.LOG_FORMAT["file"])
+    Log.info(f"Logging to file @ \"{Config.FOLDER_ROOT / "logs"}\"")
+
+TZ = Config.TIMEZONE
+
+#███████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
 AUTH = ConfigParser()
 AUTH.read(_FOLDER_ROOT / "auth.ini")
@@ -52,9 +64,7 @@ except Exception as EXC:
     verbose = f"Error reading \"{_FOLDER_ROOT / "auth.ini"}\":"
     verbose += f"\n => ({EXC.__class__.__name__}) {EXC}"
     verbose += f"\n => Will use default auth, including Vault password."
-    STARTUP_ERRORS.append(verbose)
-
-TZ = Config.TIMEZONE
+    Log.error(verbose)
 
 _proc = Popen(["docker", "ps", "--format", "{{json .}}"],
         stdout = subprocess.PIPE, stderr = subprocess.PIPE,
@@ -71,7 +81,7 @@ for line in _out.strip().split("\n"):
     state = container.get("State")
     if (state != "running"):
         if (name == "vault"): raise RuntimeError(f"Vault state: \"{state}\"!")
-        STARTUP_ERRORS.append(f"Warning: \"{name}\" state: \"{state}\"...")
+        Log.warning(f"Warning: \"{name}\" state: \"{state}\"...")
         
     DOCKER[name] = {"state": state, "ports": []}
     for port in str.split(container["Ports"], ","):
@@ -145,26 +155,15 @@ class Credentials(NamedTuple):
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-Log.remove(0)
-
-args = {"backtrace": False, "colorize": True, "serialize": False, "level": "DEBUG"}
-Log.add(**args, sink = sys.stdout, format = LokiClient.LOG_FORMAT["stdout"])
-Log.info(f"Logging to stdout...")
-
-if Config.LOG_TO_FILE:
-    sink = str(Config.FOLDER_ROOT) + "/logs/" + LokiClient.LOGFILE_FORMAT
-    Log.add(**args, sink = sink, format = LokiClient.LOG_FORMAT["file"])
-    Log.info(f"Logging to file @ \"{Config.FOLDER_ROOT / "logs"}\"")
 
 if Config.LOG_TO_LDB and ("grafana" in DOCKER):
     _creds = Credentials.get_for("loki")
     _creds.IP = f"{DEFAULT_HOST}:{DOCKER["grafana"]["ports"][-1]}"
     sink = LokiClient(url = LokiClient.URL_FORMAT.format(IP = _creds.IP),
             timeout = 10, labels = {"application": Config.SESSION_NAME})
-    Log.add(**args, sink = sink, format = LokiClient.LOG_FORMAT["gui"])
+    Log.add(**LOG_ARGS, sink = sink, format = LokiClient.LOG_FORMAT["gui"])
     Log.info(f"Logging to Loki @ \"{_creds.IP}\"")
 
-for error in STARTUP_ERRORS: Log.error(error)
 Log.info(f"Master config:\n => {Config!r}")
 
 #███████████████████████████████████████████████████████████████████████████████████████████
