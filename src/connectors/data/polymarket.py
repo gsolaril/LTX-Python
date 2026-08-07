@@ -6,7 +6,7 @@ from aiohttp import ClientWebSocketResponse
 from pandas import Series, Timestamp, Timedelta
 from src.connectors.venues import Polymarket
 from src.connectors.ws import Channel, DataConnectorWS, DataChannelWS
-from src.models import Tick, Candle, TimeFrame
+from src.models import Tick, Candle, TimeFrame, Quote
 from src.utils import Log, Postgres, Redis, TZ
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
@@ -30,7 +30,12 @@ class DataPolymarket(DataConnectorWS, Polymarket):
         self._crons[self.update_event] = Timedelta(seconds = self.Event.MIN_UPD_FREQ)
         self._shifted_keys = asyncio.Event()
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def local_to_stream(self, sources: set[str]):
+        return super().local_to_stream(self.Event.MAP)
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Redis.profiler(log = True)
     async def update_event(self):
         self.Event.shift_keys()
         self._shifted_keys.set()
@@ -77,21 +82,17 @@ class DataPolymarket(DataConnectorWS, Polymarket):
             if not isinstance(entry, dict): continue
             event = entry.get("event_type", None)
             if (event != "book"): continue
-            #print(data)
-            #raise KeyboardInterrupt
             id = entry.get("asset_id", None)
             tse = entry.get("timestamp", None)
-            if id is None or tse is None: continue
-            symbol = self.Event.MAP.get(id, None)
-            if symbol is None: continue
+            symbol_name = self.Event.MAP.inv.get(id, None)
+            symbol = self._specs.get(symbol_name, None)
+            if (symbol is None) or (tse is None): continue
             A = entry.get("asks", list())
             B = entry.get("bids", list())
             if not A: A = template.copy()
             if not B: B = template.copy()
             ts = Timestamp.utcfromtimestamp(int(tse) / 1e3)
             ts = Timestamp.utcnow() # = ts + self.OFFSET
-            tick = Tick(venue = self.VENUE, symbol = symbol,
-                    pa = A[-1]["price"], qa = A[-1]["size"],
-                    pb = B[-1]["price"], qb = B[-1]["size"],
-                    time = ts)
-            yield tick
+            yield Tick(symbol = symbol, time = ts,
+                pa = A[-1]["price"], qa = A[-1]["size"],
+                pb = B[-1]["price"], qb = B[-1]["size"])

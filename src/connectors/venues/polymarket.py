@@ -37,9 +37,8 @@ class Polymarket(Venue):
         @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def __dict__(self): return {"stream": self.STREAM_KEY,
               "time": self.time_us, "payload": dict(self.MAP)}
-        #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-        @Redis.profiler(log = True)
-        @classmethod
+        #▄▄▄▄▄▄▄▄▄▄▄▄▄
+        @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def shift_keys(cls, shift: int = 1):
             min_tf = cls.MIN_UPD_TF.name
             new_map: bidict[str, str] = bidict()
@@ -55,7 +54,7 @@ class Polymarket(Venue):
         def redis_updater(cls, func: Callable = None):
             async def wrapped(src: Connector):
                 xstreams = {str.join(Redis.SEP, [Redis.STREAM_PREFIX,
-                    PolymarketGamma.STREAM_PREFIX, cls.STREAM_KEY])}
+                                src.STREAM_PREFIX, cls.STREAM_KEY])}
                 return await Redis.consume(func, src, xstreams, 1)
             return wrapped
 
@@ -209,9 +208,9 @@ class PolymarketGamma(Connector, Polymarket):
     async def update_ids(self):
         [*await self.get_ids()]
         query_id, query_exp = list[str](), list[str]()
-        condition = "WHEN (symbol = '{0}') THEN '{1}'"
         line_upper = f"UPDATE {self.TABLE_SYMBOLS} SET"
         line_lower = f"WHERE (venue = '{self.VENUE}');"
+        condition = "WHEN (symbol = '{0}') THEN '{1}'"
 
         TAB = " " * 4
         for symbol, id in Polymarket.Event.MAP.items():

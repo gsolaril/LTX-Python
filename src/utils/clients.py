@@ -278,11 +278,12 @@ class RedisManager:
                 d_cpu = self._proc.cpu_percent()
                 d_ram = self._proc.memory_info().rss
                 result = await func(src, *args, **kwargs)
+                name = src.__class__.__name__ + self.SEP + func.__name__
                 payload["ram"] = self._proc.memory_info().rss - d_ram
                 payload["cpu"] = self._proc.cpu_percent() - d_cpu
                 payload["dus"] = int(time.time() * 1e6) - s_time
-                stream = "PERF" + self.SEP + (name := src.name + self.SEP + func.__name__)
-                self._enqueue({"stream": stream, "time_event": s_time, "payload": payload})
+                self._enqueue({"stream": "PERF" + self.SEP + name,
+                        "time_event": s_time, "payload": payload})
                 if log: Log.info(self.VERBOSE_PERF.format(name = name, **payload))
                 return result
             return wrapped
