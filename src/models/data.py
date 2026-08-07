@@ -49,6 +49,11 @@ class Quote(BasePoint):
     symbol: Symbol = field(kw_only = True)
     STREAM_KEY: ClassVar[str] = "{venue}|{symbol}|{tf}"
     INDEX_KEYS: ClassVar[list[str]] = ["venue", "symbol", "time"]
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __lt__(self, other: "Quote"):
+        if (self.time != other.time): return (self.time < other.time)
+        if (self.symbol != other.symbol): return (self.symbol < other.symbol)
+        return False
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -128,6 +133,12 @@ class Tick(Quote):
             venue = self.symbol.venue, symbol = self.symbol.symbol)
         payload = {key: getattr(self, key) for key in self.CACHE_KEYS}
         return {"stream": stream_key, "time": self.time_us, "payload": payload}
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __lt__(self, other: "Tick"|"Candle"):
+        if (self.time != other.time) or (self.symbol != other.symbol):
+            return super().__lt__(other)
+        return isinstance(other, Candle)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -235,6 +246,13 @@ class Candle(Quote):
             venue = self.symbol.venue, symbol = self.symbol.symbol)
         payload = {key: getattr(self, key) for key in self.CACHE_KEYS}
         return {"stream": stream_key, "time": self.time_us, "payload": payload}
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __lt__(self, other: "Tick"|"Candle"):
+        if (self.time != other.time) or (self.symbol != other.symbol):
+            return super().__lt__(other)
+        if isinstance(other, Tick): return False
+        return (self.tf < other.tf)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

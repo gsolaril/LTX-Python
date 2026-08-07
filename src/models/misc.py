@@ -123,6 +123,12 @@ class Symbol(DBClass):
     def __post_init__(self):
         if self.quote is None: self.quote = "USD"
         if self.base is None: self.base = self.symbol
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __lt__(self, other: "Symbol"):
+        if (self.venue != other.venue):
+            return (self.venue < other.venue)
+        return (self.symbol < other.symbol)
+
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def alias(self): return self.venue + self.SEP + self.symbol
