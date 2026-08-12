@@ -72,7 +72,7 @@ class Venue:
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class StreamingBundle(Bundle):
-    STREAM_PREFIX: ClassVar[str] = "DATA"
+    STREAM_MIDFIX: ClassVar[str] = "DATA"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Redis.stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def resample(self, time: Timestamp = None):
@@ -117,17 +117,18 @@ class Connector(ControllableAgent):
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataConnector(Connector):
-    STREAM_PREFIX: ClassVar[str] = "DATA"
+    STREAM_MIDFIX: ClassVar[str] = "DATA"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def local_to_stream(self, sources: set[str]):
         kw = {"venue": self.VENUE, "symbol": None}
+        formatter = self.stream_format[Quote]
         stream_names = set[str]()
         for symbol in sources:
             kw["symbol"] = symbol
             stream_names.add(
-                str.format(self.STREAM_FORMAT[Quote], **kw, tf = "T1"))
+                str.format(formatter, **kw, tf = "T1"))
             for tf in TimeFrame: stream_names.add(
-                str.format(self.STREAM_FORMAT[Quote], **kw, tf = tf.name))
+                str.format(formatter, **kw, tf = tf.name))
         return stream_names
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def reconfig(self, sources: set[str]):
@@ -140,7 +141,7 @@ class DataConnector(Connector):
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class ExecConnector(Connector):
-    STREAM_PREFIX: ClassVar[str] = "EXEC"
+    STREAM_MIDFIX: ClassVar[str] = "EXEC"
     VERBOSE_EXEC: ClassVar[str] = "Order {0} {1}: {2}"
     VERBOSE_ERROR_OVER: ClassVar[str] = "Order map too large. Dropping oldest order...\n => {0!r}"
     XGROUP: ClassVar[str] = Redis.Group.EXEC
@@ -162,9 +163,9 @@ class ExecConnector(Connector):
         for account in sources:
             kw["account_id"] = account
             stream_names.add(str.format(
-                self.STREAM_FORMAT[Response], **kw))
+                self.stream_format[Response], **kw))
             for tf in TimeFrame: stream_names.add(str.format(
-                self.STREAM_FORMAT[Balance], **kw,
+                self.stream_format[Balance], **kw,
                 symbol = "NAV", tf = tf.name))
                 
         return stream_names
@@ -178,8 +179,9 @@ class ExecConnector(Connector):
     async def listen_orders(self):
         xstreams = dict[str, str]()
         for account_id in self._sockets.keys():
-            xname = self.STREAM_PREFIX + "|" + account_id
-            xstreams[xname] = Redis.StreamGet.ALL.value
+            xkey = self.stream_format[Order](
+              account_id = account_id, venue = self.VENUE)
+            xstreams[xkey] = Redis.StreamGet.ALL.value
 
         while self.active:
             account_id = "N/A"
@@ -191,7 +193,7 @@ class ExecConnector(Connector):
                   streams = xstreams, count = 1)
                 if not response: continue
                 for stream, messages in response:
-                    account_id = str.split(stream, "|")[-1]
+                    account_id = str.split(stream, Redis.SEP)[-1]
                     for message_id, payload in messages:
                         xstreams[account_id] = message_id
                         await self.process_order(payload)

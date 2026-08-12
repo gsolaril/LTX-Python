@@ -25,24 +25,31 @@ class BasePoint:
         if (self.dus is not None): self.dus = int(self.dus)
         else: self.dus = int(delay_s * 1e6)
     #▄▄▄▄▄▄▄▄▄▄
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def time_event(self): return self.time
+    #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def time_us(self): return int(self.time.timestamp() * 1e6)
     #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __dict__(self): return {"stream": self.STREAM_KEY,
-            "time": self.time_us, "payload": asdict(self)}
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __dict__(self): return {"stream": None,
+      "time": self.time_us, "payload": asdict(self)}
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataPoint(BasePoint):
     index: str = field(kw_only = True)
     data: dict = field(kw_only = True)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if ("SCHEMA" not in cls.__dict__):
+            raise TypeError(f"{cls.__name__} must define a SCHEMA class attribute")
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄
     def __dict__(self):
         payload = asdict(self)
-        index, data = payload.pop("index"), payload.pop("data")
-        return {"stream": self.STREAM_KEY + "|" + index,
-                "time": self.time_us, "payload": data}
+        return {"stream": {"index": payload.pop("index")},
+            "time": self.time_us, "payload": payload.pop("data")}
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄
 class Quote(BasePoint):
@@ -51,8 +58,10 @@ class Quote(BasePoint):
     INDEX_KEYS: ClassVar[list[str]] = ["venue", "symbol", "time"]
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __lt__(self, other: "Quote"):
-        if (self.time != other.time): return (self.time < other.time)
-        if (self.symbol != other.symbol): return (self.symbol < other.symbol)
+        if (self.time_event != other.time_event):
+            return (self.time_event < other.time_event)
+        if (self.symbol != other.symbol):
+            return (self.symbol < other.symbol)
         return False
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
@@ -61,13 +70,13 @@ class Quote(BasePoint):
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄
 class Balance(BasePoint):
     account: Account = field(kw_only = True)
-    symbol: Symbol = field(kw_only = True, default = None)
+    symbol: Symbol = field(kw_only = True, default = "$")
     balance: float = field(kw_only = True)
     equity: float = field(kw_only = True, default = None)
     margin: float = field(kw_only = True, default = None)
-    STREAM_KEY: ClassVar[str] = "{venue}|{account_id}|{symbol}|{tf}"
-    INDEX_KEYS: ClassVar[list[str]] = ["venue", "account_id", "symbol", "time"]
+    STREAM_KEY: ClassVar[str] = "{venue}|{account_id}|{symbol}"
     BASIC_KEYS: ClassVar[list[str]] = ["balance", "equity", "margin"]
+    INDEX_KEYS: ClassVar[list[str]] = ["venue", "account_id", "symbol", "time"]
     CACHE_KEYS: ClassVar[list[str]] = [*BASIC_KEYS, "uPNL", "uPRC", "mPRC", "dus"]
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
@@ -96,8 +105,8 @@ class Balance(BasePoint):
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄
     def __dict__(self):
-        stream_key = self.STREAM_KEY.format(
-          venue = self.account.venue, account_id = self.account.id)
+        stream_key = {"venue": self.account.venue,
+          "account_id": self.account.id, "symbol": self.symbol.symbol}
         payload = {key: getattr(self, key) for key in self.CACHE_KEYS}
         return {"stream": stream_key, "time": self.time_us, "payload": payload}
 
@@ -111,6 +120,8 @@ class Tick(Quote):
     pb: float = field(kw_only = True, default = None)
     qb: float = field(kw_only = True, default = None)
     CACHE_KEYS: ClassVar[list[str]] = ["pa", "qa", "pb", "qb", "dus"]
+    SCHEMA: ClassVar[dict[str, str]] = {
+        "time": "i64", "pa": "f32", "qa": "f32", "pb": "f32", "qb": "f32"}
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
@@ -129,14 +140,14 @@ class Tick(Quote):
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄
     def __dict__(self):
-        stream_key = self.STREAM_KEY.format(tf = "T1",
-            venue = self.symbol.venue, symbol = self.symbol.symbol)
         payload = {key: getattr(self, key) for key in self.CACHE_KEYS}
+        stream_key = {"venue": self.symbol.venue, "symbol": self.symbol.symbol, "tf": "T1"}
         return {"stream": stream_key, "time": self.time_us, "payload": payload}
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __lt__(self, other: "Tick"|"Candle"):
-        if (self.time != other.time) or (self.symbol != other.symbol):
+        if (self.time_event != other.time_event) \
+        or (self.symbol != other.symbol):
             return super().__lt__(other)
         return isinstance(other, Candle)
 
@@ -155,9 +166,11 @@ class Candle(Quote):
     hb: float = field(kw_only = True, default = None)
     lb: float = field(kw_only = True, default = None)
     cb: float = field(kw_only = True, default = None)
-    STREAM_KEY: ClassVar[str] = "{venue}|{symbol}|{tf}"
     INDEX_KEYS: ClassVar[list[str]] = ["tf"] + Quote.INDEX_KEYS.copy()
     CACHE_KEYS: ClassVar[list[str]] = ["oa", "ha", "la", "ca", "ob", "hb", "lb", "cb", "volume", "dus"]
+    SCHEMA: ClassVar[dict[str, str]] = {
+        "time": "i64", "oa": "f32", "ha": "f32", "la": "f32", "ca": "f32",
+        "ob": "f32", "hb": "f32", "lb": "f32", "cb": "f32", "volume": "f32"}
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __repr__(self):
@@ -170,6 +183,9 @@ class Candle(Quote):
             f"O:{self.oa}, H:{self.ha}, L:{self.la}, C:{self.ca} | V:{self.volume})"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __bool__(self): return (self.volume > 0) and (self.oa > 0) and (self.ob > 0)
+    #▄▄▄▄▄▄▄▄▄▄
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def time_event(self): return self._time_close
         
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
@@ -242,14 +258,14 @@ class Candle(Quote):
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄
     def __dict__(self):
-        stream_key = self.STREAM_KEY.format(tf = self.tf.name,
-            venue = self.symbol.venue, symbol = self.symbol.symbol)
         payload = {key: getattr(self, key) for key in self.CACHE_KEYS}
+        stream_key = {"venue": self.symbol.venue, "symbol": self.symbol.symbol, "tf": self.tf.name}
         return {"stream": stream_key, "time": self.time_us, "payload": payload}
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __lt__(self, other: "Tick"|"Candle"):
-        if (self.time != other.time) or (self.symbol != other.symbol):
+        if (self.time_event != other.time_event) \
+        or (self.symbol != other.symbol):
             return super().__lt__(other)
         if isinstance(other, Tick): return False
         return (self.tf < other.tf)

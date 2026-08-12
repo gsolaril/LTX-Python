@@ -150,7 +150,6 @@ class RedisManager:
     VERBOSE_ERROR = "\"{}\" XADD failed:\n => {}"
     VERBOSE_XADD = "[Q{}] \"{}\" XADD @ {} => {}"
     VERBOSE_CP = "Warning: Queue above {0:.0%}."
-    STREAM_PREFIX: ClassVar[str] = "LTX"
     VERBOSE_QUEUE = "Queue is {:.0%} full!"
     PRINT_LIMIT = 50
     CHECKPOINTS = {
@@ -195,8 +194,9 @@ class RedisManager:
         if self._queue is not None:
             self._queue.put_nowait(payload)
         else: self._pending.append(payload)
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def scan(self, pattern: str = STREAM_PREFIX + "|*"):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def scan(self, src: Any, pattern: str = None):
+        if (pattern is None): pattern = src.stream_prefix + "|*"
         async for K in self._client.scan_iter(pattern): yield K
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def xread(self, src: Any, streams: dict[str, str],
@@ -233,10 +233,9 @@ class RedisManager:
                 if "BUSY" not in str(EXC):
                     Log.exception(EXC); raise
             mkstream = False
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def add_streams(self, streams: list[str]):
-        for suffix in streams:
-            stream = self.STREAM_PREFIX + self.SEP + suffix
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def add_streams(self, src: Any, streams: list[str]):
+        for stream in streams:
             if stream in self._streams: continue
             mkstream = not await self._client.exists(stream)
             await self.xcreategroups(stream, mkstream = mkstream)
@@ -262,7 +261,9 @@ class RedisManager:
                     results.append(obj)
                     if (obj is None): continue
                     payload: dict = obj.__dict__
-                    payload["stream"] = src.STREAM_PREFIX + self.SEP + payload["stream"]
+                    stream_key = payload.pop("stream")
+                    formatter = src.stream_format[obj.__class__]
+                    payload["stream"] = formatter(**stream_key)
                     self._enqueue(payload)
                 return results
             return wrapped
@@ -278,12 +279,12 @@ class RedisManager:
                 d_cpu = self._proc.cpu_percent()
                 d_ram = self._proc.memory_info().rss
                 result = await func(src, *args, **kwargs)
-                name = src.__class__.__name__ + self.SEP + func.__name__
+                name = str.join(self.SEP, [src.__class__.__name__, func.__name__])
+                stream = str.join(self.SEP, [src.stream_prefix, "PERF", name])
                 payload["ram"] = self._proc.memory_info().rss - d_ram
                 payload["cpu"] = self._proc.cpu_percent() - d_cpu
                 payload["dus"] = int(time.time() * 1e6) - s_time
-                self._enqueue({"stream": "PERF" + self.SEP + name,
-                        "time_event": s_time, "payload": payload})
+                self._enqueue({"stream": stream, "time_event": s_time, "payload": payload})
                 if log: Log.info(self.VERBOSE_PERF.format(name = name, **payload))
                 return result
             return wrapped
@@ -302,14 +303,13 @@ class RedisManager:
             else:
                 try:
                     payload: dict = await self._queue.get()
-                    suffix, time_event, payload = payload.values()
-                    stream = self.STREAM_PREFIX + self.SEP + suffix
+                    stream, time_event, payload = payload.values()
                     id = str(time_event)[: -3] + "-" + str(time_event)[-3 :]
-                    if suffix not in self._streams: await self.add_streams([suffix])
                     payload["qdus"] = int(time.time() * 1e6 - time_event)
+                    if stream not in self._streams: await self.add_streams(src, [stream])
                     assert (await self._client.xadd(stream, payload, id, src.maxlen_redis))
                     if src.debug: Log.debug(self.VERBOSE_XADD.format(N, stream, id, payload))
-                    self._reporter.add(suffix)
+                    self._reporter.add(stream)
                 except Exception as EXC:
                     Log.exception(EXC)
     
@@ -412,6 +412,8 @@ class ClickHouseManager:
             return self.Writer(self, table.value, func)
         if func is None: return decorator
         return decorator(func)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def query(self, query: str): return self._client.iter_process_ordinary_query(query)
     #▄▄▄▄▄▄▄▄▄▄▄
     class Writer:
         #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

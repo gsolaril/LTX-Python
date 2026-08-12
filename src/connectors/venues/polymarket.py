@@ -32,7 +32,7 @@ class Polymarket(Venue):
         REF: ClassVar[dict[str, set]] = dict()
         MIN_UPD_FREQ: ClassVar[int] = 300
         MIN_UPD_TF: ClassVar[TimeFrame] = TimeFrame(
-                      Timedelta(seconds = MIN_UPD_FREQ))
+                    Timedelta(seconds = MIN_UPD_FREQ))
         #▄▄▄▄▄▄▄▄▄▄
         @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def __dict__(self): return {"stream": self.STREAM_KEY,
@@ -53,8 +53,7 @@ class Polymarket(Venue):
         @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def redis_updater(cls, func: Callable = None):
             async def wrapped(src: Connector):
-                xstreams = {str.join(Redis.SEP, [Redis.STREAM_PREFIX,
-                                src.STREAM_PREFIX, cls.STREAM_KEY])}
+                xstreams = {src.stream_format[cls]}
                 return await Redis.consume(func, src, xstreams, 1)
             return wrapped
 
@@ -108,13 +107,14 @@ class PolymarketGamma(Connector, Polymarket):
     freq_redis_report: int = field(kw_only = True,
         default = Polymarket.Event.MIN_UPD_FREQ)
     VENUE: ClassVar[str] = Polymarket.VENUE
-    STREAM_PREFIX: ClassVar[str] = "DATA"
+    STREAM_MIDFIX: ClassVar[str] = "DATA"
     SYM_QUERY_BY: ClassVar[str] = "REGEX"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
-        self._crons[self.update_ids] = Timedelta(
-                seconds = self.freq_redis_report)
+        self._crons[self.update_ids] = Timedelta(seconds = self.freq_redis_report)
+        xkey = [self.stream_prefix, self.STREAM_MIDFIX, self.Event.STREAM_KEY]
+        self.stream_format[self.Event] = str.join(Redis.SEP, xkey)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def _parse_ids(cls, event: Dict[str, Any]):

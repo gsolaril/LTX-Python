@@ -112,7 +112,7 @@ class DataCollector(StreamingAgent):
     async def scan(self):
         new = set[str]()
         self._reporter.add("*Scanning")
-        pat = Redis.STREAM_PREFIX + "|*"
+        pat = self.STREAM_PREFIX + "|*"
         self._tfs = set(self.tfs.split(" "))
         suffixes = self._tfs.union({"T1"})
         async for stream in Redis.scan(pat):

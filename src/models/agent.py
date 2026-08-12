@@ -6,12 +6,12 @@ from typing import Any, ClassVar, Callable
 from dataclasses import dataclass, field
 from pandas import Timestamp, Timedelta
 from loguru import logger as Log
-from .misc import Symbol, TimeFrame
 from .data import Quote, Balance
-from .order import Response
+from .misc import Symbol, TimeFrame
+from .order import Request, Response
 from src.utils import Postgres, Redis, TZ
 
-STREAMABLE_TYPES = [Quote, Response, Balance]
+STREAMABLE_TYPES = [Quote, Request, Response, Balance]
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -99,18 +99,20 @@ class BaseAgent:
 class StreamingAgent(BaseAgent):
     maxlen_redis: int = field(init = False, kw_only = True, default = 10000)
     freq_redis_report: int = field(init = False, kw_only = True, default = 600)
-    STREAM_FORMAT: ClassVar[dict[str, Any]] = dict.fromkeys(STREAMABLE_TYPES)
-    STREAM_PREFIX: ClassVar[str] = ...
+    stream_prefix: str = field(init = False, kw_only = True, default = None)
+    STREAM_PREFIX: ClassVar[str] = "LTX"
+    STREAM_MIDFIX: ClassVar[str] = ...
     XGROUP: ClassVar[str] = ...
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
-        if not hasattr(cls, "STREAM_PREFIX"): return
-        if (cls.STREAM_PREFIX is Ellipsis): return
-        for model in cls.STREAM_FORMAT.keys():
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __post_init__(self):
+        if (self.stream_prefix is None):
+            self.stream_prefix = self.STREAM_PREFIX
+        self.stream_format = dict.fromkeys(STREAMABLE_TYPES)
+        for model in self.stream_format.keys():
             stream_key = getattr(model, "STREAM_KEY")
-            cls.STREAM_FORMAT[model] = cls.STREAM_PREFIX + Redis.SEP + stream_key
+            array = [self.stream_prefix, self.STREAM_MIDFIX, stream_key]
+            self.stream_format[model] = str.join(Redis.SEP, array)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def setup(self):

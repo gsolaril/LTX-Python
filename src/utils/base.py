@@ -23,6 +23,7 @@ class Config(NamedTuple):
     LOG_TO_FILE: bool = True
     LOG_TO_LDB: bool = False
     FOLDER_ROOT: Path = _FOLDER_ROOT
+    FOLDER_DBIN: Path = _FOLDER_ROOT / "dbin"
     TIMEZONE: str = "UTC"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __repr__(self): return str.join("\n => ",
@@ -30,7 +31,6 @@ class Config(NamedTuple):
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
 _PATH_CONFIG = _FOLDER_ROOT / "config.json"
 try:
     with open(_PATH_CONFIG, "r") as file:
