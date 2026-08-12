@@ -18,7 +18,7 @@ class Queue(asyncio.Queue):
         self.last_checkpoint = 0
         self.last_check = 0
         super().__init__(maxsize)
-        self.size_1pct = maxsize // 100
+        self.size_1pct = (maxsize // 100) if maxsize else 0
         if (checkpoints is not None):
             for value, func in checkpoints.items():
                 if (value > 1.0): value /= maxsize
@@ -32,7 +32,7 @@ class Queue(asyncio.Queue):
     def __len__(self): return self.qsize()
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def _recheck(self):
-        if (len(self) <= self.MIN_CHECK): return
+        if (self.maxsize <= 0) or (len(self) <= self.MIN_CHECK): return
         self.last_check = self.last_check + 1
         if (self.last_check >= self.size_1pct):
             value = len(self) / self.maxsize

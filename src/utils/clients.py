@@ -262,8 +262,14 @@ class RedisManager:
                     if (obj is None): continue
                     payload: dict = obj.__dict__
                     stream_key = payload.pop("stream")
-                    formatter = src.stream_format[obj.__class__]
-                    payload["stream"] = formatter(**stream_key)
+                    formatter = src.stream_format.get(obj.__class__)
+                    if (formatter is None):
+                        for model, fmt in src.stream_format.items():
+                            if isinstance(obj, model):
+                                formatter = fmt; break
+                    if (formatter is None):
+                        raise KeyError(f"No stream_format for {obj.__class__!r}")
+                    payload["stream"] = str.format(formatter, **stream_key)
                     self._enqueue(payload)
                 return results
             return wrapped
@@ -302,13 +308,17 @@ class RedisManager:
                 await asyncio.sleep(1e-6); continue
             else:
                 try:
-                    payload: dict = await self._queue.get()
-                    stream, time_event, payload = payload.values()
+                    msg: dict = await self._queue.get()
+                    stream = msg["stream"]
+                    time_event = msg.get("time_event", msg["time"])
+                    fields = dict(msg["payload"])
                     id = str(time_event)[: -3] + "-" + str(time_event)[-3 :]
-                    payload["qdus"] = int(time.time() * 1e6 - time_event)
+                    fields["qdus"] = int(time.time() * 1e6 - time_event)
                     if stream not in self._streams: await self.add_streams(src, [stream])
-                    assert (await self._client.xadd(stream, payload, id, src.maxlen_redis))
-                    if src.debug: Log.debug(self.VERBOSE_XADD.format(N, stream, id, payload))
+                    maxlen = src.maxlen_redis or None  # 0 => unbounded (no MAXLEN)
+                    assert (await self._client.xadd(stream, fields, id, maxlen))
+                    if src.debug: Log.debug(self.VERBOSE_XADD.format(
+                        N, stream, id, fields))
                     self._reporter.add(stream)
                 except Exception as EXC:
                     Log.exception(EXC)
