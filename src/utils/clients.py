@@ -165,6 +165,15 @@ class RedisManager:
     class StreamGet(enum.StrEnum):
         ALL, NEW, LAST = "0-0", ">", "$"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄
+    def join(cls, *args: str):
+        return str.join(cls.SEP, args)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def id_to_timestamp(cls, message_id: str):
+        ms, us = map(int, message_id.split("-"))
+        return Timestamp(ms * 1e3 + us, unit = "us", tz = "UTC")
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def _create(cls, creds: Credentials = None):
         if (creds is None): creds = Credentials.get_for("redis")
@@ -285,8 +294,8 @@ class RedisManager:
                 d_cpu = self._proc.cpu_percent()
                 d_ram = self._proc.memory_info().rss
                 result = await func(src, *args, **kwargs)
-                name = str.join(self.SEP, [src.__class__.__name__, func.__name__])
-                stream = str.join(self.SEP, [src.stream_prefix, "PERF", name])
+                name = self.join(src.__class__.__name__, func.__name__)
+                stream = self.join(src.stream_prefix, "PERF", name)
                 payload["ram"] = self._proc.memory_info().rss - d_ram
                 payload["cpu"] = self._proc.cpu_percent() - d_cpu
                 payload["dus"] = int(time.time() * 1e6) - s_time

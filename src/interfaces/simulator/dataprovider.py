@@ -1,4 +1,4 @@
-#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 import asyncio, heapq, random, struct, time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -11,11 +11,12 @@ from typing import Mapping, ClassVar, TextIO
 from typing import Iterable, Callable, Generator
 from mmap import mmap, ACCESS_READ as MMAP_READ
 from src.models import StreamingAgent
-from src.models import TimeFrame, Symbol, DataPoint, Tick, Candle
+from src.models import DataPoint, Tick, Candle
+from src.models import TimeFrame, Symbol, SymbolDict
 from src.utils import ClickHouse, Redis, b64, Config, TZ, EventLoop
 
-#███████████████████████████████████████████████████████████████████████████████████████████████████████████
-#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+#███████████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 # Row tuples from any reader gen (Model first for cheap dispatch):
 #   Tick:   (Tick,   time_us, venue, symbol, pa, qa, pb, qb)
 #   Candle: (Candle, time_us, venue, symbol, tf, oa, ha, la, ca, ob, hb, lb, cb, volume)
@@ -28,11 +29,10 @@ HeapEntry = Tuple[int, str, str, int, int, int, RowTuple]
 KIND_TICK, KIND_CANDLE, KIND_OTHER = 0, 1, 2
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataReader:
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __init__(self, iters: List[Iterable[RowTuple]],
-      time_since: Timestamp, time_until: Timestamp,
-      symbols: Dict[Tuple[str, str], Symbol],
-      buffer: int = None):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, iters: List[Iterable[RowTuple]], symbols: SymbolDict,
+          time_since: Timestamp, time_until: Timestamp, buffer: int = None):
+
         self.time_since = time_since
         self.time_until = time_until
         self._since_us = int(time_since.timestamp() * 1e6)
@@ -43,45 +43,41 @@ class DataReader:
         self._iters = [iter(it) for it in iters]
         self._single = (len(self._iters) == 1)
         self._buffer = list[HeapEntry]()
-        if self._single:
-            return
+        if self._single: return
         for src_idx in range(len(self._iters)):
             self._pull(src_idx)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __iter__(self): return self
-
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __aiter__(self): return self
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def _tf_period_us(self, tf_str: str) -> int:
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def _tf_period_us(self, tf_str: str):
         period = self._tf_us.get(tf_str)
         if (period is None):
             period = int(TimeFrame[tf_str].value.value // 1000)
             self._tf_us[tf_str] = period
         return period
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def _tf_of(self, tf_str: str) -> TimeFrame:
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def _tf_of(self, tf_str: str):
         tf = self._tf_obj.get(tf_str)
         if (tf is None):
             tf = TimeFrame[tf_str]
             self._tf_obj[tf_str] = tf
         return tf
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def _heap_key(self, item: RowTuple, src_idx: int) -> HeapEntry | None:
-        Model, time_us = item[0], item[1]
-        if (time_us < self._since_us) or (time_us > self._until_us):
-            return None
-        venue, symbol = item[2], item[3]
-        if (Model is Tick):
-            return (time_us, venue, symbol, KIND_TICK, 0, src_idx, item)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def _heap_key(self, item: RowTuple, src_idx: int):
+        Model: type = item[0]; time_us: int = item[1]
+        venue: str = item[2]; symbol: str = item[3]
+        if (time_us < self._since_us) or (time_us > self._until_us): return None
+        if (Model is Tick): return (time_us, venue, symbol, KIND_TICK, 0, src_idx, item)
         if (Model is Candle):
             period = self._tf_period_us(item[4])
-            event_us = (time_us // period) * period + period
-            return (event_us, venue, symbol, KIND_CANDLE, period, src_idx, item)
+            time_us = (time_us // period) * period + period
+            return (time_us, venue, symbol, KIND_CANDLE, period, src_idx, item)
         return (time_us, venue, symbol, KIND_OTHER, 0, src_idx, item)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -98,11 +94,12 @@ class DataReader:
             heapq.heappush(self._buffer, key)
             return
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __next__(self):
         if self._single:
             source = self._iters[0]
-            if (source is None): raise StopIteration
+            if (source is None):
+                raise StopIteration
             while True:
                 item = next(source, None)
                 if (item is None):
@@ -139,8 +136,8 @@ class DataReader:
         data = dict(zip(list(Model.SCHEMA)[1 :], item[4 :], strict = True))
         return Model(time = ts, index = item[2] + " " + item[3], data = data)
 
-#███████████████████████████████████████████████████████████████████████████████████████████████████████████
-#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+#███████████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class FileReader(DataReader):
     # Uncompressed little-endian .bin (mmap-friendly):
@@ -163,10 +160,10 @@ class FileReader(DataReader):
     VERBOSE_BAD_FIELDS = "Expected {0} fields, got {1}: \"{2}\""
     VERBOSE_SCHEMA_NO_TIME = VERBOSE_SCHEMA_BAD.format("{0}",
                         f"first entry must be \"i64\" (time)")
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __init__(self, symbols: Dict[Tuple[str, str], Symbol],
-                time_since: Timestamp, time_until: Timestamp,
-                timeframes: Set[str], buffer: int = None):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, symbols: SymbolDict, timeframes: Set[str],
+                    time_since: Timestamp, time_until: Timestamp,
+                    buffer: int = None):
 
         iters = list[Iterable[RowTuple]]()
         self._timeframes = timeframes.copy()
@@ -177,7 +174,7 @@ class FileReader(DataReader):
             for tf in timeframes: iters.append(
                 self.gen(venue_name, symbol_name, tf))
         
-        super().__init__(iters, time_since, time_until, symbols, buffer)
+        super().__init__(iters, symbols, time_since, time_until, buffer)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -202,8 +199,8 @@ class FileReader(DataReader):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def _normalize_csv_columns(cls, columns: List[str], schema: Mapping[str, str]):
-        if ((expected := list(schema)) != columns):
-            raise ValueError(cls.VERBOSE_BAD_HEADER.format(columns, expected))
+        if ((expected := list(schema)) != columns): raise ValueError(
+            cls.VERBOSE_BAD_HEADER.format(columns, expected))
         return columns
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -241,8 +238,8 @@ class FileReader(DataReader):
                 file_to.write(row_formatted.pack(*values))
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def gen(cls, venue: str, symbol: str, tf: str, progress: bool = False):
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def gen(cls, venue: str, symbol: str, tf: str, progbar: bool = False):
         if (tf == "T1"): Model, suffix = Tick, cls.EXT
         else: Model, suffix = Candle, f"_{tf}{cls.EXT}"
         path = cls.FOLDER_DBIN / venue / (symbol + suffix)
@@ -264,7 +261,7 @@ class FileReader(DataReader):
                 total_rows, chars_left = divmod(max(nbytes, 0), row_size)
                 final_offset = cls.INITIAL_OFFSET + total_rows * row_size
                 offsets = range(cls.INITIAL_OFFSET, final_offset, row_size)
-                if progress: offsets = tqdm(offsets, desc, total = total_rows,
+                if progbar: offsets = tqdm(offsets, desc, total = total_rows,
                       unit = "rows", mininterval = 0.5)
                 for offset in offsets:
                     time_us, *values = row_formatted.unpack_from(memory, offset)
@@ -275,8 +272,8 @@ class FileReader(DataReader):
                     cls.VERBOSE_TRUNCATED_ROW.format(path.name))
             finally: memory.close()
 
-#███████████████████████████████████████████████████████████████████████████████████████████████████████████
-#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+#███████████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class TSDBReader(DataReader):
     VENUE_SYMBOL_CLAUSE = "(venue = '{venue}') AND (symbol IN ({symbols}))"
@@ -284,10 +281,10 @@ class TSDBReader(DataReader):
     COMMON_QUERY = "SELECT * FROM {table} \n WHERE ({symbols}){tf_block}" \
           " \n AND (time >= '{time_since}') AND (time <= '{time_until}')" \
           " \n ORDER BY time, venue, symbol{tf_index} ASC"
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __init__(self, symbols: Dict[Tuple[str, str], Symbol],
-                time_since: Timestamp, time_until: Timestamp,
-                timeframes: Set[str], buffer: int = None):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, symbols: SymbolDict, timeframes: Set[str],
+                    time_since: Timestamp, time_until: Timestamp,
+                    buffer: int = None):
 
         self._timeframes = timeframes.copy()
         other_sources = dict[str, Set[str]]()
@@ -303,14 +300,14 @@ class TSDBReader(DataReader):
                     other_sources[venue_name] = set()
                 other_sources[venue_name].add(symbol_name)
 
-        queries = self.common_query_builder(time_since, time_until, symbols, timeframes)
+        queries = self.common_query_builder(symbols, timeframes, time_since, time_until)
         iters = [ClickHouse.query(query) for query in queries.values()]
-        super().__init__(iters, time_since, time_until, symbols, buffer)
+        super().__init__(iters, symbols, time_since, time_until, buffer)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def common_query_builder(cls, time_since: Timestamp, time_until: Timestamp,
-                  symbols: Dict[Tuple[str, str], Symbol], timeframes: Set[str]):
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def common_query_builder(cls, symbols: SymbolDict, timeframes: Set[str],
+                              time_since: Timestamp, time_until: Timestamp):
 
         clauses, queries = dict[str, str](), dict[str, str]()
         for venue_name, symbol_names in symbols.items():
@@ -338,18 +335,20 @@ class TSDBReader(DataReader):
 
         return queries        
 
-#███████████████████████████████████████████████████████████████████████████████████████████████████████████
-#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+#███████████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataProvider(StreamingAgent):
+    STREAM_PREFIX: ClassVar[str] = "BTX-"
     STREAM_MIDFIX: ClassVar[str] = "DATA"
     XGROUP: ClassVar[str] = Redis.Group.DATA
+    btid: str = field(default_factory = b64)
     reader_mode: str = field(default = "tsdb")
     time_since: Timestamp = field(default_factory = lambda: Timestamp.min.tz_localize("UTC"))
     time_until: Timestamp = field(default_factory = lambda: Timestamp.max.tz_localize("UTC"))
     timeframes: Set[str] = field(default_factory = set)
-    symbols: Dict[Tuple[str, str], Symbol] = field(default_factory = dict)
+    symbols: SymbolDict = field(default_factory = dict)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Redis.stream#█▄▄▄▄▄
     async def main(self):
@@ -358,7 +357,7 @@ class DataProvider(StreamingAgent):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         self.reader_mode = self.reader_mode.upper()
-        self.stream_prefix = "BTX-" + b64(time.time())
+        self.stream_prefix = self.STREAM_PREFIX + self.btid
         args = {"timeframes": self.timeframes, "symbols": self.symbols,
             "time_since": self.time_since, "time_until": self.time_until}
         if (self.reader_mode == "FILE"): self.reader = FileReader(**args)
@@ -366,9 +365,9 @@ class DataProvider(StreamingAgent):
         else: raise ValueError(f"Invalid reader mode: {self.reader_mode}")
         super().__post_init__()
 
-#███████████████████████████████████████████████████████████████████████████████████████████████████████████
-#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+#███████████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class TestFileReader(TestCase):
     N: ClassVar[int] = 100_000
     N_PRINT: ClassVar[int] = 3
@@ -439,7 +438,7 @@ class TestFileReader(TestCase):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def _time_gen(self, venue: str, symbol: str, tf: str):
         t0 = time.perf_counter()
-        decoded = list(FileReader.gen(venue, symbol, tf, progress = True))
+        decoded = list(FileReader.gen(venue, symbol, tf, progbar = True))
         dus = time.perf_counter() - t0
         rate = (len(decoded) / dus) if (dus > 0) else float("inf")
         return decoded, dus, rate
@@ -503,8 +502,8 @@ class TestFileReader(TestCase):
             self.assertAlmostEqual(fields[7], cb, places = 4)
             self.assertEqual(int(fields[8]), volume)
 
-#███████████████████████████████████████████████████████████████████████████████████████████████████████████
-#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+#███████████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class TestDataProvider(TestCase):
     # Drains DataProvider.main without Redis.stream (uses __wrapped__).
@@ -590,7 +589,7 @@ class TestDataProvider(TestCase):
         self.assertEqual(len(async_items), n_ticks)
         self.assertTrue(all(isinstance(x, Tick) for x in async_items))
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def test_main_file_with_redis(self):
         n_ticks, n_candles = self.N, max(1, self.N // 60)
         expected = n_ticks + n_candles
@@ -616,7 +615,7 @@ class TestDataProvider(TestCase):
         provider.maxlen_redis = 0
         prefix = provider.stream_prefix
 
-        #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+        #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         async def xlen_total():
             streams, total = list(), 0
             async for key in Redis._client.scan_iter(match = prefix + "|*"):
@@ -624,7 +623,7 @@ class TestDataProvider(TestCase):
                 total += int(await Redis._client.xlen(key))
             return streams, total
 
-        #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+        #▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         async def run():
             Redis._ready.clear()
             Redis._pending.clear()

@@ -5,8 +5,9 @@ from collections import deque
 from pandas import DataFrame, concat
 from pandas import Timestamp, Timedelta
 from dataclasses import dataclass, field
-from src.models import TimeFrame, StreamingAgent
-from src.models import Quote, Tick, Candle, Symbol
+from src.models import Quote, Tick, Candle
+from src.models import Symbol, TimeFrame
+from src.models import StreamingAgent
 from src.utils import *
 
 #███████████████████████████████████████████████████████████████████████████████████████████
@@ -139,18 +140,14 @@ class DataCollector(StreamingAgent):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def process(self, stream: str, message_id: str, payload: dict):
         self._reporter.add(stream)
-        ms, us = map(int, message_id.split("-"))
-        _, _, venue, symbol, tf = stream.split("|")
+        venue, symbol, tf = stream.split(Redis.SEP)[2 :]
+        payload["time"] = Redis.id_to_timestamp(message_id)
         payload["symbol"] = Symbol(venue = venue, symbol = symbol)
-        payload["time"] = Timestamp(ms * 1e3 + us, unit = "us", tz = "UTC")
-        if tf in self._tfs:
-            payload["volume"] = int(payload.pop("volume", 0))
-            obj = Candle(**payload, tf = TimeFrame[tf])
-            await self._queues[Candle].put(obj)
-        elif tf.startswith("T"):
-            obj = Tick(**payload)
-            await self._queues[Tick].put(obj)
-            
+        payload["volume"] = int(payload.pop("volume", 0))
+        if tf.startswith("T"): obj = Tick(**payload)
+        else: obj = Candle( **payload, tf = TimeFrame[tf])
+        await self._queues[type(obj)].put(obj)
+
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def main(self, **kwargs):
         await self._scan_ready.wait()
