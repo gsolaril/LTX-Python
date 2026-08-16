@@ -151,7 +151,7 @@ class ExecConnector(Connector):
         super().__post_init__()
         self._uid_to_acc = dict[str, str]()
         self._uid_to_eid = bidict[str, str]()
-        self._accounts = dict[str, Account]()
+        self._accounts = dict[str, AccountState]()
         self._crons[self.update_specs] = TimeFrame.D1
         listen_orders = self.__class__.listen_orders
         name = f"{self.name}/listen_orders"
@@ -163,7 +163,7 @@ class ExecConnector(Connector):
         for account in sources:
             kw["account_id"] = account
             stream_names.add(str.format(
-                self.stream_format[Response], **kw))
+                self.stream_format[Order], **kw))
             for tf in TimeFrame: stream_names.add(str.format(
                 self.stream_format[Balance], **kw,
                 symbol = "NAV", tf = tf.name))
@@ -179,7 +179,7 @@ class ExecConnector(Connector):
     async def listen_orders(self):
         xstreams = dict[str, str]()
         for account_id in self._sockets.keys():
-            xkey = self.stream_format[Order](
+            xkey = self.stream_format[OrderCreate](
               account_id = account_id, venue = self.VENUE)
             xstreams[xkey] = Redis.StreamGet.ALL.value
 

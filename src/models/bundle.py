@@ -107,13 +107,13 @@ class Bundle:
                 df[tf][repr(symbol)] = len(candles)
 
         df = DataFrame.from_dict(df, orient = "index")
-        report_lines = [f"  Time of start:      {self._start_at:%H:%M:%S} ({self.since_start} ago)"]
+        report_lines = [f"  Time of start:      {self._start_at:%X} ({self.since_start} ago)"]
 
         if df.empty:
             report_lines.append("\n    ||| No data yet ||| ")
         else:
-            report_lines.append(f"  Time of last tick:  {self._tick_last.time:%H:%M:%S} ({self.since_tick_n} ago)")
-            report_lines.append(f"  Time of first tick: {self._tick_first.time:%H:%M:%S} ({self.since_tick_1} ago)")
+            report_lines.append(f"  Time of last tick:  {self._tick_last.time:%X} ({self.since_tick_n} ago)")
+            report_lines.append(f"  Time of first tick: {self._tick_first.time:%X} ({self.since_tick_1} ago)")
             df.columns = df.columns.rename(Tick.INDEX_KEYS[: 2])
             df["*total"] = df.sum(axis = "columns")
             df = concat((df.iloc[-1:], df.iloc[:-1]))

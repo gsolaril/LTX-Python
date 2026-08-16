@@ -35,7 +35,7 @@ class Binance(Venue):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def to_create_payload(cls, order: Order):
+    def to_create_payload(cls, order: OrderCreate):
         payload = {
             "symbol": cls.symbol_to_venue(order.symbol),
             "side": order.side, "type": order.type,
@@ -47,7 +47,7 @@ class Binance(Venue):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def to_modify_payload(cls, order: Order, order_id: str):
+    def to_modify_payload(cls, order: OrderCreate, order_id: str):
         payload = {
             "symbol": cls.symbol_to_venue(order.symbol),
             "side": order.side, "orderId": order_id,

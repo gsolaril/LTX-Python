@@ -4,7 +4,7 @@ from pandas import Timestamp
 from sortedcontainers import SortedDict
 from dataclasses import dataclass, field, asdict
 from typing import Any, ClassVar, Callable
-from .misc import Account, Symbol, TimeFrame
+from .misc import AccountState, Symbol, TimeFrame
 from src.utils import TZ
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
@@ -69,7 +69,7 @@ class Quote(BasePoint):
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄
 class Balance(BasePoint):
-    account: Account = field(kw_only = True)
+    account: AccountState = field(kw_only = True)
     symbol: Symbol = field(kw_only = True, default = "$")
     balance: float = field(kw_only = True)
     equity: float = field(kw_only = True, default = None)
@@ -133,7 +133,7 @@ class Tick(Quote):
     
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __repr__(self):
-        time = f"{self.time:%Y/%m/%d %H:%M:%S.%f}"
+        time = f"{self.time:%Y/%m/%d %X.%f}"
         return f"Tick({self.symbol!r} @ {time} | " \
           f"A:{self.pa}/{self.qa}, B:{self.pb}/{self.qb})"
 
@@ -174,11 +174,11 @@ class Candle(Quote):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __repr__(self):
-        if self.tf.is_unit("S"): interval = f"{self.time:%Y/%m/%d %H:%M:%S}-{self._time_close:%S}"
+        if self.tf.is_unit("S"): interval = f"{self.time:%Y/%m/%d %X}-{self._time_close:%S}"
         elif self.tf.is_unit("M"): interval = f"{self.time:%Y/%m/%d %H:%M}-{self._time_close:%H:%M}"
         elif self.tf.is_unit("H"): interval = f"{self.time:%Y/%m/%d %H:%M}-{self._time_close:%H:%M}"
         elif self.tf.is_unit("D"): interval = f"{self.time:%Y/%m/%d}-{self._time_close:%Y/%m/%d}"
-        else: interval = f"{self.time:%Y/%m/%d %H:%M:%S.%f}-{self._time_close:%Y/%m/%d %H:%M:%S.%f}"
+        else: interval = f"{self.time:%Y/%m/%d %X.%f}-{self._time_close:%Y/%m/%d %X.%f}"
         return f"Candle({self.symbol!r} @ {interval} ({self.tf.name}) | " \
             f"O:{self.oa}, H:{self.ha}, L:{self.la}, C:{self.ca} | V:{self.volume})"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -284,7 +284,7 @@ if (__name__ == "__main__"):
 
     # Example: Create and display a Balance point
 
-    account = Account(id="TEST_ACC1", venue="BINANCE")
+    account = AccountState(id="TEST_ACC1", venue="BINANCE")
     balance = Balance(account=account, balance=1000.0, equity=1200.0, margin=100.0, time=Timestamp.now(TZ))
     print(balance)
     print(balance.__dict__)

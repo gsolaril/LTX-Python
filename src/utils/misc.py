@@ -115,8 +115,8 @@ class Reporter(defaultdict[str, Report]):
             df = df.rename_axis(header, axis = "columns")
         df["mean_count"] = df["mean_count"].astype(int)
         df["start_at"] = df["start_at"].dt.strftime("%Y/%m/%d %H:%M")
-        df["batch_at"] = df["batch_at"].dt.strftime("%H:%M:%S")
-        df["entry_at"] = df["entry_at"].dt.strftime("%H:%M:%S.%f").str[: -3]
+        df["batch_at"] = df["batch_at"].dt.strftime("%X")
+        df["entry_at"] = df["entry_at"].dt.strftime("%X.%f").str[: -3]
         if (df.shape[0] <= self.print_limit): df = df.sort_index()
         else: df = df.sort_values("total_count", ascending = False)
         start_str = self.start_at.strftime("%Y/%m/%d %H:%M")

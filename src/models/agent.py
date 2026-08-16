@@ -8,10 +8,10 @@ from pandas import Timestamp, Timedelta
 from loguru import logger as Log
 from .data import Quote, Balance
 from .misc import Symbol, TimeFrame
-from .order import Request, Response
+from .order import Message, Order
 from src.utils import Postgres, Redis, TZ
 
-STREAMABLE_TYPES = [Quote, Request, Response, Balance]
+STREAMABLE_TYPES = [Quote, Message, Order, Balance]
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

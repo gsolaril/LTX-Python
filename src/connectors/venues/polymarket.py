@@ -217,7 +217,7 @@ class PolymarketGamma(Connector, Polymarket):
             quote, tf, shift = self.split_symbol(symbol)
             query_id.append(2 * TAB + condition.format(symbol, id))
             exp = Timestamp.now("UTC").ceil(tf.value) + shift * tf.value
-            exp_str = Timestamp.strftime(exp, "%Y-%m-%d %H:%M:%S+00:00")
+            exp_str = Timestamp.strftime(exp, "%Y-%m-%d %X+00:00")
             query_exp.append(2 * TAB + condition.format(symbol, exp_str))
 
         if not query_id or not query_exp: return

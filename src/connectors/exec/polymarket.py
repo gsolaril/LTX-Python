@@ -54,7 +54,7 @@ class ExecPolymarket(ExecConnector, Polymarket):
                 action, "error", f"\n => {payload!r}\n => {EXC!r}"))
         
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def create_order(self, request: Order):
+    async def create_order(self, request: OrderCreate):
 
         payload = {}
 
@@ -71,7 +71,7 @@ class ExecPolymarket(ExecConnector, Polymarket):
         EID = response.pop("order_id", None)
         response["EID"] = EID
 
-        response = Response(request, **response)
+        response = Order(request, **response)
         args = {"action": "create", "result": "OK"}
 
         if (EID is not None): self._uid_to_eid[response.UID] = EID
@@ -92,7 +92,7 @@ class ExecPolymarket(ExecConnector, Polymarket):
         status = self.status_to_local(response)
         response["status"] = status
         
-        response = Response(request, **response)
+        response = Order(request, **response)
         args = {"action": "delete", "result": "OK"}
 
         ok = (status == "OK")
