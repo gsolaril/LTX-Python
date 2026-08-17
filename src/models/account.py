@@ -179,9 +179,11 @@ class Account(AccountState):
             reason = OrderReject.Reason.NOT_FOUND, request = request)
         order.on_delete(request)
         return order
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def check_order(self, order: Order,
-            rules: Rules = None, quote: Quote = None):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def check_order(self, order: Order, rules: Rules = None, quote: Quote = None):
+        # - Check if the "order" entry price was touched by the quote. If wasn't, return None.
+        # - Check if the "order" is fillable upon account conditions. If wasn't, return OrderReject.
+        # - Change the order's status to FILLED, return the FILLED "order" itself.
         if not order.check_filled(quote): return None
         reject = self.check_margin(order, rules, quote)
         if (reject is not None): return reject
@@ -209,8 +211,9 @@ class Account(AccountState):
         self.order_count = self.order_count - 1
         return trade
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def check_trade(self, trade: Trade,
-            rules: Rules = None, quote: Quote = None):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def check_trade(self, trade: Trade, rules: Rules = None, quote: Quote = None):
+        # - Check if "trade" closed upon SL/TP/"size = 0". If wasn't, return None.
+        # - Change the trade's status to CLOSED, return the CLOSED "trade" itself.
         if not trade.check_closed(quote): return None
         return trade

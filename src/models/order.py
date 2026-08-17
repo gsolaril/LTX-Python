@@ -256,7 +256,7 @@ class OrderDelete(Message):
 class Order(OrderCreate):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class Status(StrEnum):
-        PLACED, FILLED, DUMPED = "PLACED", "FILLED", "DUMPED"
+        PLACED, FILLED, DUMPED, CLOSED = "PLACED", "FILLED", "DUMPED", "CLOSED"
 
     EID: str = field(kw_only = True, init = True, default = None)
     UID: str = field(kw_only = True, init = True, default = None)
@@ -363,36 +363,55 @@ class Trade(Order):
         if (time_place is None): time_place = Timestamp.now(TZ)
         super().__init__(**order.__dict__)
         self.check_expired(time_place)
-        self.time_place = time_place
-        self.price_avg = order.price
-        self.price_close = order.price
-        self.time_hedge = time_place
-        self.asset_value = 0
+        self.time_place = self.time_hedge = time_place
+        self.price_avg = self.price_hedge = order.price
+        self.trade_value = self.size = 0
         self.on_fill(order)
+    #▄▄▄▄▄▄▄▄
+    @property
+    def pnl(self):
+        diff_price = self.price_hedge - self.price_avg
+        return diff_price * self.size * self.side.value
+    #▄▄▄▄▄▄▄▄
+    @property
+    def asset_value(self):
+        return self.trade_value * (self.price_hedge / self.price_avg)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_fill(self, order: Order):
+        order.status = Order.Status.FILLED
+        if (self.status == Order.Status.CLOSED): return
         self.time_hedge = order.time
         self.size = self.size + order.size
-        order.status = Order.Status.FILLED
-        self.asset_value = self.asset_value + order.asset_value
+        self.trade_value = self.trade_value + order.asset_value
         total_base_units = self.size * order.symbol.value_per_unit
-        self.price_avg = self.asset_value / total_base_units
+        self.price_avg = self.trade_value / total_base_units
         if order.price_sl: self.price_sl = order.price_sl
         if order.price_tp: self.price_tp = order.price_tp
-        return (abs(self.size) < order.symbol.min_order_size)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_modify(self, modify: OrderModify):
+        if (self.status == Order.Status.CLOSED): return
         if modify.price_sl: self.price_sl = modify.price_sl
         if modify.price_tp: self.price_tp = modify.price_tp
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def check_closed(self, quote: Quote = None):
+        if (self.status == Order.Status.CLOSED): return False
+        if (abs(self.size) < self.symbol.min_order_size):
+            self.status = Order.Status.CLOSED
+            return True
         bid = (self.side.flip == self.Side.SELL)
-        self.price_close = quote.mkt_price(bid, ranged = True)
+        self.time_hedge = quote.time_event
+        self.price_hedge = quote.mkt_price(bid, ranged = True)
         if not self.price_sl or not self.price_tp: return False
-        diff_sl = (self.price_close - self.price_sl) * self.side.value
-        diff_tp = (self.price_close - self.price_tp) * self.side.value
-        if (diff_sl >= 0): self.price_close = self.price_sl; return True
-        if (diff_tp >= 0): self.price_close = self.price_tp; return True
+        diff_sl = (self.price_hedge - self.price_sl) * self.side.value
+        diff_tp = (self.price_hedge - self.price_tp) * self.side.value
+        if (diff_sl >= 0):
+            self.status = Order.Status.CLOSED
+            self.price_hedge = self.price_sl
+            return True
+        if (diff_tp >= 0):
+            self.status = Order.Status.CLOSED
+            self.price_hedge = self.price_tp
+            return True
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

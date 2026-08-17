@@ -5,7 +5,8 @@ from pandas import Timestamp, Timedelta
 from dataclasses import dataclass, field
 from typing import Any, List, Tuple, Dict, Set
 from typing import Iterable, Callable, ClassVar
-from src.models import Account, Rules, TimeFrame, Candle, Tick
+from src.models import Account, Rules, TimeFrame
+from src.models import Quote, Candle, Tick
 from src.models import OrderCreate, OrderReject
 from src.models import OrderModify, OrderDelete
 from src.models import Order, OrderDictBySym as OrderDict
@@ -99,6 +100,52 @@ class ExecReceiver(StreamingAgent):
         self.quotes[symbol_key] = obj
         responses = await self.clearing(*symbol_key)
         if responses: await self.send_responses(*responses)
+         
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def clearing(self, venue: str, symbol: str):
+        symbol_key = (venue, symbol)
+        quote: Quote = self.quotes[symbol_key]
+        stuff_rejected = dict[str, OrderReject]()
+
+        orders_to_clear = dict[str, Order]()
+        for UID in list(self.orders_active[symbol_key]):
+            order: Order = self.orders_active[symbol_key][UID]
+            result = self.account.check_order(order, self.rules, quote)
+            if result is None: continue
+            elif isinstance(result, OrderReject):
+                stuff_rejected[result.UID] = result
+            self.orders_active[symbol_key].pop(UID)
+            self.account.orders_closed[UID] = order
+            self.account.orders_active.pop(UID)
+            orders_to_clear[UID] = order
+            if self.account.is_hedging:
+                trade: Trade = Trade(order, time_place = quote.time_event)
+                self.account.trades_active[symbol_key][UID] = trade
+            else:
+                trade: Trade = self.trades_active[symbol_key]
+                if (trade is not None): trade.on_fill(order)
+                else: self.trades_active[symbol_key] = Trade(
+                  order = order, time_place = quote.time_event)
+
+        trades_to_clear = dict[str, Trade]()
+        for UID in list(self.trades_active[symbol_key]):
+            trade: Trade = self.trades_active[symbol_key][UID]
+            result = self.account.check_trade(trade, self.rules, quote)
+            if result is None: continue
+            elif isinstance(result, OrderReject):
+                stuff_rejected[result.UID] = result
+            self.account.trades_closed[UID] = trade
+            self.account.trades_active.pop(UID)
+            trades_to_clear[UID] = trade
+            if self.account.is_hedging:
+                self.trades_active[symbol_key].pop(UID)
+            else: self.trades_active[symbol_key] = dict()
+        
+        # TODO: Update GAV, NAV and PNL in the account!
+
+        return [*orders_to_clear.values(),
+                *trades_to_clear.values(),
+                *stuff_rejected.values()]
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def order_create(self, **payload):
@@ -135,43 +182,9 @@ class ExecReceiver(StreamingAgent):
         request = OrderDelete(account = self.account, UID = UID, **payload)
         response = self.account.on_order_delete(request, self.rules, quote)
         return [response]
-         
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def clearing(self, venue: str, symbol: str):
-        stuff_rejected = dict[str, OrderReject]()
-        quote = self.quotes[symbol_key := (venue, symbol)]
-
-        order: Order = None
-        orders_to_clear = OrderDict()
-        for order in self.orders_active[symbol_key]:
-            result = self.account.check_order(order, self.rules, quote)
-            if result is None: continue
-            elif isinstance(result, OrderReject):
-                stuff_rejected[result.UID] = result
-            orders_to_clear[order.UID] = order
-
-        for order in orders_to_clear.values():
-            self.account.orders_active.pop(order.UID)
-            self.account.orders_closed[order.UID] = order
-
-        trade: Trade = None
-        trades_to_clear = TradeDict()
-        for trade in self.trades_active[symbol_key]:
-            result = self.account.check_trade(trade, self.rules, quote)
-            if result is None: continue
-            elif isinstance(result, OrderReject):
-                stuff_rejected[result.UID] = result
-            else: trades_to_clear[trade.UID] = trade
-
-        for trade in trades_to_clear.values():
-            self.account.trades_active.pop(trade.UID)
-            self.account.trades_closed[trade.UID] = trade
-
-        return [*orders_to_clear.values(),
-                *trades_to_clear.values(),
-                *stuff_rejected.values()]
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Redis.stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def send_response(self, response: Order):
-        ... # Response should have the right "__dict__"
+    @Redis.stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def send_response(self, *responses):
+        async for response in responses:
+            yield response
