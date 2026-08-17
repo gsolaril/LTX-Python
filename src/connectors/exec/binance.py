@@ -31,7 +31,7 @@ class ExecBinance(ExecConnectorWS, Binance):
     @Redis.stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_message(self, message: Dict):
         # TODO: implement for Binance based on Binance API docs
-        yield Balance(...)
+        yield Account(...)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def create_order(self, payload: dict):
         # TODO: implement for Binance based on Binance API docs

@@ -1,12 +1,12 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import numpy
-from numpy import sign
-from typing import ClassVar
-from typing import Set, List
+from numpy import inf as INF, sign
+from enum import IntEnum, StrEnum
+from typing import Tuple, Set, List, ClassVar
 from dataclasses import asdict, dataclass, field
 from pandas import Timestamp, Timedelta
-from enum import IntEnum, StrEnum
-from .misc import Symbol, AccountState
+from .misc import Symbol
+from .account import Account
+from .data import Quote, Tick, Candle
 from src.utils import Log, TZ, b64
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
@@ -14,7 +14,7 @@ from src.utils import Log, TZ, b64
 #▄▄▄▄▄▄▄▄▄
 @dataclass
 class Message:
-    account: AccountState = field(kw_only = True)
+    account: Account = field(kw_only = True)
     time: Timestamp = field(kw_only = True, default = None, init = False)
     UID: str = field(kw_only = True, default = None, init = False)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -68,11 +68,11 @@ class OrderReject(Message):
         NOT_FOUND = "{subject} ({summary}) not found."
         WRONG_SYMBOL = "{subject} ({summary}) has an invalid venue/symbol: \"{symbol}\"."
         WRONG_ACCOUNT = "{subject} ({summary}) has an invalid account: \"{account}\". Actual: \"{actual}\""
-        WRONG_ENTRY = "{subject} ({summary}) has an invalid execution price. Current: {price_current:.5f}"
-        WRONG_SL = "{subject} ({summary}) has an invalid SL at {price_sl:.5f}. Current price: {price_current:.5f}"
-        WRONG_TP = "{subject} ({summary}) has an invalid TP at {price_tp:.5f}. Current price: {price_current:.5f}"
+        WRONG_ENTRY = "{subject} ({summary}) has an invalid execution price. Current: {curr_price:.5f}"
+        WRONG_SL = "{subject} ({summary}) has an invalid SL at {price_sl:.5f}. Current price: {curr_price:.5f}"
+        WRONG_TP = "{subject} ({summary}) has an invalid TP at {price_tp:.5f}. Current price: {curr_price:.5f}"
         WRONG_SIZE = "{subject} ({summary}) has an invalid size of {size:.5f}. Min allowed: {min_order_size:.5f}"
-        EXPIRED = "{subject} ({summary}) expired at {expiration:%Y/%m/%d %X}. Current time: {now:%Y/%m/%d %X}"
+        EXPIRED = "{subject} ({summary}) expired at {expiration:%Y/%m/%d %X}. Current time: {curr_time:%Y/%m/%d %X}"
         NO_MODIFY = "{subject} ({summary}) has nothing to modify."
         MAX_MARGIN = "{subject} ({summary}) requires a margin of {req:.2f}. Current: {margin:.2f}. Max allowed: {max_margin:.2f}"
         MAX_ORDERS = "{subject} ({summary}) rejected due to max number of orders. Current: {current}. Max allowed: {max_allowed}"
@@ -81,14 +81,14 @@ class OrderReject(Message):
     reason: str = field(kw_only = True, init = False)
     message: str = field(kw_only = True, init = False)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def from_request(cls, reason: Reason, request: Message, **kwargs):
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def from_request(cls, reason: Reason, request: Message, quote: Quote = None, **kwargs):
         subject = request.__class__.__name__.split(".")[-1]
-        time = kwargs.pop("time", None)
-        message = reason.value.format(subject = subject, now = time,
-            summary = request.summary, **request.__dict__, **kwargs)
-        return cls(account = request.account, UID = request.UID,
-            time = time, reason = reason.name, message = message)
+        curr_time = None if (quote is None) else quote.time_event
+        message = reason.value.format(subject = subject, **request.__dict__,
+            summary = request.summary, curr_time = curr_time, **kwargs)
+        return cls(account = request.account, time = curr_time,
+            UID = request.UID, reason = reason.name, message = message)
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def summary(self): return self.__str__()
@@ -98,10 +98,17 @@ class OrderReject(Message):
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class OrderMessage(Message):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    class Side(IntEnum):
+        BUY = -1; SELL = -1
+        #▄▄▄▄▄▄▄▄
+        @property
+        def flip(self): return self.BUY \
+            if (self == self.SELL) else self.SELL
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class Type(IntEnum): MARKET = 0; LIMIT = +1; STOP = -1
     class Mode(StrEnum): GTC = "GTC"; IOC = "IOC"
-    class Side(IntEnum): BUY = -1; SELL = -1
+
     price: float = field(kw_only = True, default = None)
     price_sl: float = field(kw_only = True, default = None)
     price_tp: float = field(kw_only = True, default = None)
@@ -110,19 +117,21 @@ class OrderMessage(Message):
     side: Side = field(kw_only = True, init = False, default = None)
     mode: Mode = field(kw_only = True, default = Mode.GTC)
     VERBOSE_SLTP: ClassVar[str] = "For {side} order; {stop} ({stop_price:.5f}) must be {where} entry price ({price:.5f})"
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def check_entry(self, curr_price: float = None, min_diff: float = None):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def check_entry(self, quote: Quote = None):
         if (self.type == self.Type.MARKET): return True
-        elif (curr_price is None): return True
+        elif (quote is None): return True
+        curr_price = quote.mkt_price(self.side == self.Side.SELL)
         diff_price = self.price - curr_price
         sign_trade = diff_price * self.side.value
         diff_price = abs(diff_price)
         self.type = self.Type(int(sign(sign_trade)))
         if (min_stops is None): min_stops = 0
         return (diff_price >= min_stops)
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def check_expired(self, curr_time: Timestamp = None):
-        if (curr_time is None): curr_time = Timestamp.now(TZ)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def check_expired(self, quote: Quote = None):
+        if (quote is None): curr_time = Timestamp.now(TZ)
+        else: curr_time = quote.time_event
         if (self.expiration is None): return True
         elif (curr_time < self.expiration): return True
         str_exp = self.expiration.strftime("%Y/%m/%d %X")
@@ -130,30 +139,35 @@ class OrderMessage(Message):
         Log.error("Order already expired...\n => " \
               f"(NOW) {str_time} > (EXP) {str_exp}")
         return False
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def check_stops(self, SL: bool, curr_price: float = None, min_diff: float = None):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def check_stops(self, SL: bool, quote: Quote = None):
         if SL: direction, stop, stop_price = 1, "SL", self.price_sl
         else: direction, stop, stop_price = -1, "TP", self.price_tp
         if not stop_price: return True
         stop_price = float(stop_price)
         sign_entry = direction * self.side.value
         sign_curr = sign_entry * self.type.value
+        curr_price = quote.mkt_price(self.side == self.Side.SELL)
         eargs = {"curr_price": curr_price, "stop_price": stop_price,
           "stop": stop, "side": self.side.name, "price": self.price}
         if (self.type != self.Type.MARKET):
             diff_entry_stop = (self.price - stop_price) * sign_entry
-            if (min_diff <= diff_entry_stop): return True
+            if (quote.symbol.min_price_diff <= diff_entry_stop): return True
         elif (curr_price is not None):
             diff_curr_stop = (curr_price - stop_price) * sign_curr
-            if (min_diff <= diff_curr_stop): return True
+            if (quote.symbol.min_price_diff <= diff_curr_stop): return True
         Log.error(self.VERBOSE_SLTP.format(**eargs))
         return False
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def reject(self, curr_time: Timestamp = None, curr_price: float = None, min_diff: float = None):
-        if not self.check_expired(curr_time): return OrderReject.Reason.EXPIRED
-        if not self.check_entry(curr_price, min_diff): return OrderReject.Reason.WRONG_ENTRY
-        if not self.check_stops(True, curr_price, min_diff): return OrderReject.Reason.WRONG_SL
-        if not self.check_stops(False, curr_price, min_diff): return OrderReject.Reason.WRONG_TP
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def reject(self, quote: Quote = None):
+        if not self.check_expired(quote): return OrderReject.from_request(
+            request = self, quote = quote, reason = OrderReject.Reason.EXPIRED)
+        if not self.check_entry(quote): return OrderReject.from_request(
+            request = self, quote = quote, reason = OrderReject.Reason.WRONG_ENTRY)
+        if not self.check_stops(True, quote): return OrderReject.from_request(
+            request = self, quote = quote, reason = OrderReject.Reason.WRONG_SL)
+        if not self.check_stops(False, quote): return OrderReject.from_request(
+            request = self, quote = quote, reason = OrderReject.Reason.WRONG_TP)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -187,12 +201,12 @@ class OrderCreate(OrderMessage):
         if (abs(self.size) >= self.symbol.min_order_size): return True
         Log.error(self.VERBOSE_MIN_SIZE.format(self.symbol.min_order_size))
         return False
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def reject(self, curr_time: Timestamp = None, curr_price: float = None):
-        # TODO: To be used in "rules.reject"
-        if not self.check_size(): return OrderReject.Reason.WRONG_SIZE
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def reject(self, quote: Quote = None):
+        if not self.check_size(): return OrderReject.from_request(
+            request = self, quote = quote, reason = OrderReject.Reason.WRONG_SIZE)
         if not self.check_comment(): self.comment = self.comment[: self.MAX_COMMENT]
-        return super().reject(curr_time, curr_price, self.symbol.min_stops_diff)
+        return super().reject(quote = quote)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __str__(self): return self.VERBOSE_REPR.format(UID = self.UID,
       symbol = self.symbol, size = abs(self.size), price = self.price, 
@@ -209,7 +223,7 @@ class OrderCreate(OrderMessage):
     def summary(self):
         str_time = self.time.strftime(self.DT_FORMAT)
         summary = f"{self.__str__()[: -1]} | {str_time}"
-        if (self.expiration is None): exp_in = numpy.inf
+        if (self.expiration is None): exp_in = INF
         else: exp_in = self.expiration - self.time
         return f"{summary}, E+{exp_in.total_seconds():.1f}s)"
 
@@ -219,7 +233,8 @@ class OrderCreate(OrderMessage):
 @dataclass(frozen = True)
 class OrderModify(OrderMessage):
     VERBOSE_REPR: ClassVar[str] = "#{UID}"
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def summary(self): return self.VERBOSE_REPR.format(UID = self.UID)
     def __repr__(self): return self.summary
     def __str__(self): return self.summary
@@ -228,7 +243,8 @@ class OrderModify(OrderMessage):
 @dataclass(frozen = True)
 class OrderDelete(Message):
     VERBOSE_REPR: ClassVar[str] = "#{UID}"
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def summary(self): return self.VERBOSE_REPR.format(UID = self.UID)
     def __repr__(self): return self.summary
     def __str__(self): return self.summary
@@ -250,13 +266,15 @@ class Order(OrderCreate):
     VERBOSE_REPR: ClassVar[str] = "#{UID}({EID}): {side} {size} \"{symbol!r}\" @ {price:.5f}"
     STREAM_KEY: ClassVar[str] = "{venue}|{account_id}|ORDERS"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def from_request(cls, request: OrderCreate, time: Timestamp = None, price: float = None):
-        reason: OrderReject.Reason = request.reject(curr_time = time, curr_price = price)
-        if not reason: return OrderReject(reason = reason, request = request, time = time)
-        return cls(time = time, time_order = request.time, account = request.account,
-                  UID = request.UID, status = Order.Status.PLACED, **request.payload)
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def from_request(cls, request: OrderCreate, quote: Quote = None):
+        reason: OrderReject.Reason = request.reject(quote = quote)
+        if not reason: return OrderReject(reason = reason,
+            request = request, time = quote.time_event)
+        return cls(time = quote.time_event, time_order = request.time,
+            account = request.account, status = Order.Status.PLACED,
+            UID = request.UID, **request.payload)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
         if (self.EID is None): self.EID = self.UID
@@ -277,13 +295,13 @@ class Order(OrderCreate):
     def summary(self):
         str_time = self.time.strftime(self.DT_FORMAT)
         summary = f"{self.__str__()[: -1]} | {str_time}"
-        if (self.expiration is None): exp_in_us = numpy.inf
+        if (self.expiration is None): exp_in_us = INF
         else: exp_in_us = (self.expiration - self.time).total_seconds()
         delay_us = 1e6 * (self.time_order - self.time).total_seconds()
         summary = f"{summary}, D+{delay_us:.0f}µs, E+{exp_in_us:.1f}s"
         return f"{summary} | {self.status})"
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def modify(self, time: Timestamp = None, price: float = None, **kwargs):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def modify(self, quote: Quote = None, **kwargs):
         to_modify = dict()
         if ("mode" in kwargs): to_modify["mode"] = kwargs["mode"]
         if ("price" in kwargs): to_modify["price"] = kwargs["price"]
@@ -300,19 +318,20 @@ class Order(OrderCreate):
             if pop: to_modify.pop(field)
 
         reason: OrderReject.Reason = None
-        modify = OrderModify(time = time,
-            account = self.account, UID = self.UID, **to_modify)
+
+        curr_time = None if (quote is None) else quote.time_event
+        modify = OrderModify(account = self.account, UID = self.UID,
+            time = curr_time, **to_modify)
         if not to_modify: reason = OrderReject.Reason.NO_MODIFY
-        else: reason = modify.reject(time, price,
-            min_diff = self.symbol.min_stops_diff)
-        if (reason is None): return modify
-        else: return OrderReject.from_request(
-            time = time, request = modify,
-            reason = reason)
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def delete(self, curr_time: Timestamp = None):
-        return OrderDelete(account = self.account,
-            time = curr_time, UID = self.UID)
+        else: reason = modify.reject(quote = quote)
+        if (reason is not None): return OrderReject.from_request(
+            request = modify, reason = reason, quote = quote)
+        else: return modify
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def delete(self, quote: Quote = None):
+        curr_time = None if (quote is None) else quote.time_event
+        return OrderDelete(account = self.account, UID = self.UID,
+            time = curr_time)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_modify(self, modify: OrderModify):
         if modify.mode: self.mode = modify.mode
@@ -325,7 +344,15 @@ class Order(OrderCreate):
     def on_delete(self, delete: OrderDelete):
         self.status = Order.Status.DUMPED
         self.time = delete.time
-
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def check_filled(self, quote: Quote):
+        if (self.status == Order.Status.FILLED): return False
+        elif (self.price is None): return True
+        curr_price = quote.mkt_price(self.side)
+        direction = (- self.type.value) * self.side.value
+        diff_entry = (curr_price - self.price) * direction
+        return (diff_entry > 0)
+    
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄
@@ -338,6 +365,7 @@ class Trade(Order):
         self.check_expired(time_place)
         self.time_place = time_place
         self.price_avg = order.price
+        self.price_close = order.price
         self.time_hedge = time_place
         self.asset_value = 0
         self.on_fill(order)
@@ -349,11 +377,28 @@ class Trade(Order):
         self.asset_value = self.asset_value + order.asset_value
         total_base_units = self.size * order.symbol.value_per_unit
         self.price_avg = self.asset_value / total_base_units
+        if order.price_sl: self.price_sl = order.price_sl
+        if order.price_tp: self.price_tp = order.price_tp
         return (abs(self.size) < order.symbol.min_order_size)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_modify(self, modify: OrderModify):
         if modify.price_sl: self.price_sl = modify.price_sl
         if modify.price_tp: self.price_tp = modify.price_tp
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def check_closed(self, quote: Quote = None):
+        bid = (self.side.flip == self.Side.SELL)
+        self.price_close = quote.mkt_price(bid, ranged = True)
+        if not self.price_sl or not self.price_tp: return False
+        diff_sl = (self.price_close - self.price_sl) * self.side.value
+        diff_tp = (self.price_close - self.price_tp) * self.side.value
+        if (diff_sl >= 0): self.price_close = self.price_sl; return True
+        if (diff_tp >= 0): self.price_close = self.price_tp; return True
+
+#███████████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+OrderDictByUID, TradeDictByUID = dict[str, Order], dict[str, Trade]
+OrderDictBySym = dict[Tuple[str, str], Order | dict[str, Order]]
+TradeDictBySym = dict[Tuple[str, str], Trade | dict[str, Trade]]
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

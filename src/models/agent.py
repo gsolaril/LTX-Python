@@ -6,12 +6,12 @@ from typing import Any, ClassVar, Callable
 from dataclasses import dataclass, field
 from pandas import Timestamp, Timedelta
 from loguru import logger as Log
-from .data import Quote, Balance
+from .data import Quote, AccountState
 from .misc import Symbol, TimeFrame
 from .order import Message, Order
 from src.utils import Postgres, Redis, TZ
 
-STREAMABLE_TYPES = [Quote, Message, Order, Balance]
+STREAMABLE_TYPES = [Quote, Message, Order, AccountState]
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

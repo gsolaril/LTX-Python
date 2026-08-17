@@ -3,8 +3,8 @@ import asyncio
 from pandas import Timestamp
 from sortedcontainers import SortedDict
 from dataclasses import dataclass, field, asdict
-from typing import Any, ClassVar, Callable
-from .misc import AccountState, Symbol, TimeFrame
+from typing import Any, Tuple, ClassVar, Callable
+from .misc import Symbol, TimeFrame
 from src.utils import TZ
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
@@ -39,7 +39,7 @@ class BasePoint:
 class DataPoint(BasePoint):
     index: str = field(kw_only = True)
     data: dict = field(kw_only = True)
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         if ("SCHEMA" not in cls.__dict__):
@@ -63,52 +63,8 @@ class Quote(BasePoint):
         if (self.symbol != other.symbol):
             return (self.symbol < other.symbol)
         return False
-
-#███████████████████████████████████████████████████████████████████████████████████████████████
-#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄
-class Balance(BasePoint):
-    account: AccountState = field(kw_only = True)
-    symbol: Symbol = field(kw_only = True, default = "$")
-    balance: float = field(kw_only = True)
-    equity: float = field(kw_only = True, default = None)
-    margin: float = field(kw_only = True, default = None)
-    STREAM_KEY: ClassVar[str] = "{venue}|{account_id}|{symbol}"
-    BASIC_KEYS: ClassVar[list[str]] = ["balance", "equity", "margin"]
-    INDEX_KEYS: ClassVar[list[str]] = ["venue", "account_id", "symbol", "time"]
-    CACHE_KEYS: ClassVar[list[str]] = [*BASIC_KEYS, "uPNL", "uPRC", "mPRC", "dus"]
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __post_init__(self):
-        super().__post_init__()
-        if self.symbol is not None:
-            error = (f"Symbol venue (\"{self.symbol.venue}\") "
-            f"must match account's (\"{self.account.venue}\")")
-            assert (self.symbol.venue == self.account.venue), error
-        for key in self.BASIC_KEYS:
-            setattr(self.account, key, getattr(self, key))
-    #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def uPNL(self): return account.uPNL
-    #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def uPRC(self): return account.uPRC
-    #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def mPRC(self): return account.mPRC
-    #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def ppal(self): return account.ppal
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __repr__(self): return self.account.inline(
-                type = "Balance", time = self.time)
-    #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄
-    def __dict__(self):
-        stream_key = {"venue": self.account.venue,
-          "account_id": self.account.id, "symbol": self.symbol.symbol}
-        payload = {key: getattr(self, key) for key in self.CACHE_KEYS}
-        return {"stream": stream_key, "time": self.time_us, "payload": payload}
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def mkt_price(self, bid: bool, ranged: bool = False): ...
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -130,6 +86,10 @@ class Tick(Quote):
         self.qa, self.qb = float(self.qa), float(self.qb)
         self.error = (self.pa * self.qa == 0) | (self.pb * self.qb == 0)
         self.qavga = self.qavgb = self.pavga = self.pavgb = None
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def mkt_price(self, bid: bool, ranged: bool = False):
+        return self.pa if bid else self.pb
     
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __repr__(self):
@@ -186,7 +146,10 @@ class Candle(Quote):
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def time_event(self): return self._time_close
-        
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def mkt_price(self, bid: bool, ranged: bool = False):
+        if ranged: return self.ha if bid else self.lb
+        return self.ca if bid else self.cb
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
@@ -272,6 +235,10 @@ class Candle(Quote):
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+QuoteDict = dict[Tuple[str, str], dict[str, Tick | Candle]]
+
+#███████████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 if (__name__ == "__main__"):
 
@@ -285,7 +252,7 @@ if (__name__ == "__main__"):
     # Example: Create and display a Balance point
 
     account = AccountState(id="TEST_ACC1", venue="BINANCE")
-    balance = Balance(account=account, balance=1000.0, equity=1200.0, margin=100.0, time=Timestamp.now(TZ))
+    balance = AccountState(account=account, balance=1000.0, equity=1200.0, margin=100.0, time=Timestamp.now(TZ))
     print(balance)
     print(balance.__dict__)
     print(f"uPNL: {balance.uPNL}")

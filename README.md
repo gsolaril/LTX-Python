@@ -11,16 +11,17 @@ MetaTrader EA / MQL5 live in a **separate repo**: `/home/gaston/LTX-MT5` (not th
 **New plan**
 
 Next steps:
-* (08/13) Backtester / fake exchange - exec
-* (08/15) Backtester / fake exchange - manager
-* (08/16) Backtester / fake exchange - reporting
-* (08/23) "framework/strategy.py" - autonomous Strategy class
-* (08/23) "framework/strmodels.py" - state-based StateStrategy class
-* (08/30) MetaTrader exec connector (REDIS)
-* (09/06) Polymarket exec connector (REST)
-* (09/13) Order router
-* (09/20) alerting
-* (10/xx) other connectors (Crypto, IBKR, Rofex, IQOption, DeFi?)
+* (08/23) Order & Trade model review
+* (08/23) Backtester / fake exchange - exec
+* (08/30) Backtester / fake exchange - manager
+* (09/06) Strategy base class
+* (09/13) StateStrategy class
+* (09/20) Backtester / fake exchange - reporting
+* (09/27) MetaTrader connector revision
+* (10/04) Polymarket exec connector (REST)
+* (10/11) Order manager & routing
+* (11/xx) other connectors (Crypto, IBKR, Rofex, IQOption, DeFi?)
+* (11/xx) alerting
 * (12/xx) LTX-C++ (already started)
 
 ---

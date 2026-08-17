@@ -8,8 +8,10 @@ from dataclasses import dataclass, field, Field
 from enum import Enum, EnumMeta, IntEnum
 from pandas import Timestamp, Timedelta
 from .order import OrderCreate, Order, Trade
-from .order import OrderModify, OrderDelete
-from .order import OrderReject
+from .order import OrderModify, OrderDelete, OrderReject
+from .order import OrderDictBySym as OrderDict
+from .order import TradeDictBySym as TradeDict
+from .data import BasePoint, Quote, Tick, Candle
 from src.utils import Log, TZ
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
@@ -110,182 +112,6 @@ class Symbol(DBClass):
     QUERY_BY: ClassVar[dict[str, Callable]] = {
         "ALL": lambda A: "", "REGEX": lambda A: "\nAND (symbol ~ '({})')".format(str.join("|", A)),
         "ARRAY": lambda A: "\nAND (symbol IN ({}))".format(str.join(", ", map("'{}'".format, A))) }
-
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-OrderDict = dict[Symbol, dict[str, Order]]
-TradeDict = dict[Symbol, dict[str, Trade]]
-
-#███████████████████████████████████████████████████████████████████████████████████████████████
-#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class AccountState(DBClass):
-    id: str = field(kw_only = True)
-    venue: str = field(kw_only = True)
-    balance: float = field(kw_only = True)
-    equity: float = field(kw_only = True, default = None)
-    leverage: float = field(kw_only = True, default = 1.0)
-    gav: float = field(kw_only = True, default = None)
-    nav: float = field(kw_only = True, default = None)
-    time: Timestamp = field(kw_only = True, default = None)
-    INDEX_KEYS: ClassVar[list[str]] = ["venue", "id"]
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __post_init__(self):
-        if (self.time is None): self.time = Timestamp.now(TZ)
-        if (self.equity is None): self.equity = self.balance
-        if (self.margin is None): self.margin = 0
-        if (self.gav is None): self.gav = 0
-        if (self.nav is None): self.nav = 0
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __setattr__(self, name: str, value: Any):
-        super().__setattr__(name, value)
-        if (name != "time"):
-            super().__setattr__("time", Timestamp.now(TZ))
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __str__(self): return self.venue + self.SEP + self.id
-    def __repr__(self): return self.venue + self.SEP + self.id
-    def __eq__(self, other: "AccountState"): return (self.id == other.id)
-    def __ne__(self, other: "AccountState"): return (self.id != other.id)
-    #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def margin(self): return abs(self.nav) / self.leverage
-    #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def mPRC(self): return (self.margin / self.equity) if self.equity else 0.0
-    #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def uPNL(self): return (self.equity - self.balance) if self.equity else 0.0
-    #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def uPRC(self): return (self.uPNL / self.balance) if self.equity else 0.0
-    #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __dict__(self): return {"time": self.time, "venue": self.venue, "id": self.id,
-                "balance": self.balance, "equity": self.equity, "margin": self.margin,
-                "gav": self.gav, "nav": self.nav}
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def inline(self, time: Timestamp = None, type: str = None):
-        if (type is None): type = "Account"
-        if (time is None): time = self.time
-        time_str = time.strftime("%Y/%m/%d %X.%f")
-        return (f"{type}({str(self)} @ {time_str} | "
-            f"E:{self.balance:.2f}{self.uPNL:+.2f}, "
-            f"M:{self.mPRC:.1f}%)")
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __repr__(self): return self.inline()
-    def __str__(self): return self.inline()
-
-#███████████████████████████████████████████████████████████████████████████████████████████████
-#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄
-@dataclass
-class Rules:
-    commission: float = field(kw_only = True, init = True, default = 0.0)
-    max_drawdown: float = field(kw_only = True, init = True, default = 1.0)
-    max_sizer_up: float = field(kw_only = True, init = True, default = None)
-    max_sizer_dn: float = field(kw_only = True, init = True, default = None)
-    max_freq_us: int = field(kw_only = True, init = True, default = None)
-    slippage_mn: float = field(kw_only = True, init = True, default = 0.0)
-    slippage_sd: float = field(kw_only = True, init = True, default = 1.0)
-    fixed_spread: float = field(kw_only = True, init = True, default = 2.0)
-    max_mPRC: float = field(kw_only = True, init = True, default = 1.0)
-    max_orders: int = field(kw_only = True, init = True, default = 100)
-    max_trades: int = field(kw_only = True, init = True, default = 100)
-
-#▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class Account(AccountState):
-    is_hedging: bool = field(default = False)
-    orders_active: OrderDict = field(kw_only = True, default = OrderDict())
-    orders_closed: OrderDict = field(kw_only = True, default = OrderDict())
-    trades_active: TradeDict = field(kw_only = True, default = TradeDict())
-    trades_closed: TradeDict = field(kw_only = True, default = TradeDict())
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __post_init__(self):
-        super().__post_init__()
-        self.reconcile()
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def reconcile(self):
-        pass
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __dict__(self): return {**super().__dict__,
-        "count_orders": self.order_count,
-        "count_trades": self.trade_count}
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def check_margin(self, request: OrderCreate, rules: Rules):
-        max_margin = self.equity * rules.max_mPRC
-        margin_req = request.asset_value / self.leverage
-        margin_future = self.margin + margin_req
-        mPRC_future = self.equity / abs(margin_future)
-        if (mPRC_future <= rules.max_mPRC): return None
-        else: return OrderReject.from_request(time = time,
-            reason = OrderReject.Reason.MAX_MARGIN, request = request,
-            req = margin_req, margin = self.margin, max_margin = max_margin) 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def on_order_create(self, request: OrderCreate, rules: Rules = None,
-                          time: Timestamp = None, price: float = None):
-        reject = request.reject(time, price)
-        if (reject is not None): return reject
-        elif (rules is not None):
-            reject = self.check_margin(request, rules)
-            if (reject is not None): return reject
-            if (rules.max_orders <= self.order_count): return OrderReject.from_request(
-                reason = OrderReject.Reason.MAX_ORDERS, request = request, time = time,
-                current = self.order_count, max_allowed = rules.max_orders)
-            since_last = 1e6 * (time - self.last_updated).total_seconds()
-            if (since_last < rules.max_freq_us): return OrderReject.from_request(
-                reason = OrderReject.Reason.MAX_FREQ, request = request, time = time,
-                min_allowed = rules.max_freq_us, current = since_last)
-
-        order = Order.from_request(request, time, price)
-        self.orders_active[order.UID] = order
-        self.order_count = self.order_count + 1
-        self.last_updated = time
-        return order
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def on_order_modify(self, request: OrderModify, rules: Rules = None,
-                          time: Timestamp = None, price: float = None):
-        order: Order = self.orders_active.get(request.UID, None)
-        if (order is None): return OrderReject.from_request(time = time,
-            reason = OrderReject.Reason.NOT_FOUND, request = request)
-        order.on_modify(request)
-        return order
-
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def on_order_delete(self, request: OrderDelete, rules: Rules = None,
-                          time: Timestamp = None, price: float = None):
-        order: Order = self.orders_active.pop(request.UID, None)
-        if (order is None): return OrderReject.from_request(time = time,
-            reason = OrderReject.Reason.NOT_FOUND, request = request)
-        order.on_delete(request)
-        return order
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def on_order_filled(self, order: Order, rules: Rules = None,
-                    time: Timestamp = None, price: float = None):
-
-        order.price = price
-        reject = self.check_margin(order, rules)
-        if (reject is not None): return reject
-        trade: Trade = None
-        if self.is_hedging:
-            if order.symbol not in self.trades_active:
-                self.trades_active[order.symbol] = dict()
-            trade = Trade.from_request(order, time, price)
-            self.trades_active[order.symbol][trade.UID] = trade
-        else:
-            if order.symbol not in self.trades_active:
-                trade = Trade.from_request(order, time, price)
-                self.trades_active[order.symbol] = trade
-            else:
-                trade = self.trades_active[order.symbol]
-                trade.on_fill(order)
-            if (trade.size == 0):
-                self.trades_active[order.symbol].pop(trade.UID)
-        
-        self.orders_active[order.symbol].pop(trade.UID)
-        self.trade_count = self.trade_count + 1
-        self.order_count = self.order_count - 1
-        return trade
     
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -364,6 +190,10 @@ class TimeFrame(Enum, metaclass = TimeFrameMeta):
             yield tf_div, _divisors[tf_div][-1]
         if (tf_max != mtf):
             yield tf_max, _divisors[tf_max][-1]
+
+#███████████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+SymbolDict = Dict[Tuple[str, str], Symbol]
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

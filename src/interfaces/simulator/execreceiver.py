@@ -3,21 +3,20 @@ import time
 from enum import IntEnum
 from pandas import Timestamp, Timedelta
 from dataclasses import dataclass, field
-from typing import List, Tuple, Dict, Set
+from typing import Any, List, Tuple, Dict, Set
 from typing import Iterable, Callable, ClassVar
-from src.models import Account, Rules, Order, Trade
-from src.models import OrderCreate, OrderModify, OrderDelete
-from src.models import TimeFrame, Candle, Tick, SymbolDict
+from src.models import Account, Rules, TimeFrame, Candle, Tick
+from src.models import OrderCreate, OrderReject
+from src.models import OrderModify, OrderDelete
+from src.models import Order, OrderDictBySym as OrderDict
+from src.models import Trade, TradeDictBySym as TradeDict
+from src.models import SymbolDict, QuoteDict
 from src.models import StreamingAgent
 from src.utils import ClickHouse, Redis, b64
 from src.utils import Log
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-QuoteDict = dict[Tuple[str, str], dict[str, Tick | Candle]]
-OrderDict = dict[Tuple[str, str], dict[str, Order]]
-TradeDict = dict[Tuple[str, str], dict[str, Trade]]
-
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class ExecReceiver(StreamingAgent):
@@ -45,20 +44,25 @@ class ExecReceiver(StreamingAgent):
             if (tf == "T1"): self._tick_driven = True
             else: self._timeframes.add(TimeFrame[tf])
         self._min_tf: TimeFrame = min(self._timeframes)
+        self.callbacks: dict[Order.Action, Callable] = {
+            Order.Action.CREATE: self.order_create,
+            Order.Action.MODIFY: self.order_modify,
+            Order.Action.DELETE: self.order_delete,
+        }
         super().__post_init__()
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def main(self):
         self.quotes = QuoteDict()
         self.n_orders = self.n_trades = 0
-        self.orders_active, self.orders_closed = OrderDict(), OrderDict()
-        self.trades_active, self.trades_closed = TradeDict(), TradeDict()
+        self.orders_active = OrderDict()
+        self.trades_active = TradeDict()
         ex_key = (self.stream_prefix, self.STREAM_MIDFIX, self.account.id)
         listen_to = {Redis.join(*ex_key)}
         for symbol in self.symbols.values():
             head = [self.stream_prefix, "DATA", symbol.venue, symbol.symbol]
             for tf in self.timeframes: listen_to.add(Redis.join(*head, tf))
-        
+
         await Redis.consume(self.process, src = self, xstreams = listen_to, n = 0)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -66,15 +70,15 @@ class ExecReceiver(StreamingAgent):
         btid, source, stream = stream.split(Redis.SEP, maxsplit = 3)
         if (btid != self.account.id): return Log.error(
             f"Wrong BTID: \"{btid} != {self.account.id}\"")
-        response = None
+        responses = None
         if (source == "DATA"):
-            response = await self.on_quote(stream, message_id, payload)
+            responses = await self.on_quote(stream, message_id, payload)
         elif (source == "EXEC"):
-            action = stream.split(Redis.SEP)[-1]
-            if (action == "create"): response = await self.order_create(payload)
-            elif (action == "modify"): response = await self.order_modify(payload)
-            elif (action == "delete"): response = await self.order_delete(payload)
-        if response: await self.send_response(response)
+            action_str = stream.split(Redis.SEP)[-1]
+            action = Order.ACTION[action_str]
+            callback = self.callbacks[action]
+            responses = await callback(**payload)
+        if responses: await self.send_responses(responses)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def on_quote(self, stream: str, message_id: str, payload: dict):
@@ -93,34 +97,79 @@ class ExecReceiver(StreamingAgent):
         else: return
         self.time = obj.time_event
         self.quotes[symbol_key] = obj
-        response = await self.clearing(*symbol_key)
-        if response: await self.send_response(response)
+        responses = await self.clearing(*symbol_key)
+        if responses: await self.send_responses(*responses)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def order_create(self, payload: dict):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def order_create(self, **payload):
         venue_name = payload.pop("venue")
         symbol_name = payload.pop("symbol")
         symbol_key = (venue_name, symbol_name)
         try: symbol = self.symbols.get(symbol_key)
         except Exception as EXC: return Log.exception(EXC)
-        order = OrderCreate(symbol = symbol, account = self.account, **payload)
-        
-        response: Order = Order(order)
-        self.account.
-        self.active[symbol][order.UID] = response
-        return response
+        quote = self.quotes[symbol_key]
+        request = OrderCreate(account = self.account, symbol = symbol, **payload)
+        response = self.account.on_order_create(request, self.rules, quote)
+        return [response]
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def order_modify(self, payload: dict): ...
-    def order_delete(self, payload: dict): ...
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def order_modify(self, **payload):
+        UID = payload.get("UID", None)
+        if (UID is None): return OrderReject.from_request(time = self.time,
+            reason = OrderReject.Reason.NOT_FOUND, request = payload)
+        order: Order = self.orders_active[UID]
+        symbol_key = (order.symbol.venue, order.symbol.symbol)
+        quote = self.quotes[symbol_key]
+        request = OrderModify(account = self.account, UID = UID, **payload)
+        response = self.account.on_order_modify(request, self.rules, quote)
+        order.on_modify(response)
+        return [response]
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def order_delete(self, **payload):
+        UID = payload.get("UID", None)
+        if (UID is None): return OrderReject.from_request(time = self.time,
+            reason = OrderReject.Reason.NOT_FOUND, request = payload)
+        order: Order = self.orders_active[UID]
+        symbol_key = (order.symbol.venue, order.symbol.symbol)
+        quote = self.quotes[symbol_key]
+        request = OrderDelete(account = self.account, UID = UID, **payload)
+        response = self.account.on_order_delete(request, self.rules, quote)
+        return [response]
          
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def clearing(self, venue: str, symbol: str):
-        to_cancel = dict[str, Order]()
-        to_execute = dict[str, Order]()
-        symbol_key = (venue, symbol)
+        stuff_rejected = dict[str, OrderReject]()
+        quote = self.quotes[symbol_key := (venue, symbol)]
+
+        order: Order = None
+        orders_to_clear = OrderDict()
         for order in self.orders_active[symbol_key]:
-            pass
+            result = self.account.check_order(order, self.rules, quote)
+            if result is None: continue
+            elif isinstance(result, OrderReject):
+                stuff_rejected[result.UID] = result
+            orders_to_clear[order.UID] = order
+
+        for order in orders_to_clear.values():
+            self.account.orders_active.pop(order.UID)
+            self.account.orders_closed[order.UID] = order
+
+        trade: Trade = None
+        trades_to_clear = TradeDict()
+        for trade in self.trades_active[symbol_key]:
+            result = self.account.check_trade(trade, self.rules, quote)
+            if result is None: continue
+            elif isinstance(result, OrderReject):
+                stuff_rejected[result.UID] = result
+            else: trades_to_clear[trade.UID] = trade
+
+        for trade in trades_to_clear.values():
+            self.account.trades_active.pop(trade.UID)
+            self.account.trades_closed[trade.UID] = trade
+
+        return [*orders_to_clear.values(),
+                *trades_to_clear.values(),
+                *stuff_rejected.values()]
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Redis.stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
