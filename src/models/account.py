@@ -9,8 +9,8 @@ from enum import Enum, EnumMeta, IntEnum
 from pandas import Timestamp, Timedelta
 from .order import OrderCreate, Order, Trade
 from .order import OrderModify, OrderDelete, OrderReject
-from .order import OrderDictByUID as OrderDict
-from .order import TradeDictByUID as TradeDict
+from .order import OrderDictBySym as OrderDict
+from .order import TradeDictBySym as TradeDict
 from .data import BasePoint, Quote, Tick, Candle
 from .misc import DBClass
 from src.utils import TZ
@@ -23,8 +23,9 @@ class AccountState(BasePoint, DBClass):
     id: str = field(kw_only = True)
     venue: str = field(kw_only = True)
     balance: float = field(kw_only = True)
-    equity: float = field(kw_only = True, default = None)
     leverage: float = field(kw_only = True, default = 1.0)
+    uPNL: float = field(kw_only = True, default = None)
+    rPNL: float = field(kw_only = True, default = None)
     gav: float = field(kw_only = True, default = None)
     nav: float = field(kw_only = True, default = None)
     time: Timestamp = field(kw_only = True, default = None)
@@ -35,8 +36,8 @@ class AccountState(BasePoint, DBClass):
     def __post_init__(self):
         super().__post_init__()
         if (self.time is None): self.time = Timestamp.now(TZ)
-        if (self.equity is None): self.equity = self.balance
-        if (self.margin is None): self.margin = 0
+        if (self.uPNL is None): self.uPNL = 0
+        if (self.rPNL is None): self.rPNL = 0
         if (self.gav is None): self.gav = 0
         if (self.nav is None): self.nav = 0
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -53,19 +54,19 @@ class AccountState(BasePoint, DBClass):
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def margin(self): return abs(self.nav) / self.leverage
     #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def mPRC(self): return (self.margin / self.equity) if self.equity else 0.0
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def equity(self): return self.balance + self.uPNL
     #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def uPNL(self): return (self.equity - self.balance) if self.equity else 0.0
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def mPRC(self): return self.margin / self.equity
     #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def uPRC(self): return (self.uPNL / self.balance) if self.equity else 0.0
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def uPRC(self): return self.uPNL / self.balance
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def payload(self): return {"balance": self.balance, "equity": self.equity,
       "margin": self.margin, "gav": self.gav, "nav": self.nav, "uPNL": self.uPNL,
-      "uPRC": self.uPRC, "mPRC": self.mPRC}
+      "rPNL": self.rPNL, "uPRC": self.uPRC, "mPRC": self.mPRC}
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄
     def __dict__(self):
@@ -179,41 +180,42 @@ class Account(AccountState):
             reason = OrderReject.Reason.NOT_FOUND, request = request)
         order.on_delete(request)
         return order
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def check_order(self, order: Order, rules: Rules = None, quote: Quote = None):
-        # - Check if the "order" entry price was touched by the quote. If wasn't, return None.
-        # - Check if the "order" is fillable upon account conditions. If wasn't, return OrderReject.
-        # - Change the order's status to FILLED, return the FILLED "order" itself.
-        if not order.check_filled(quote): return None
-        reject = self.check_margin(order, rules, quote)
-        if (reject is not None): return reject
-        order.status = Order.Status.FILLED
-        trade: Trade = None
-        if self.is_hedging:
-        # TODO: WRONG FROM HERE ON. LET
-        # THE EXEC-RECEIVER HANDLE THIS
-            if order.symbol not in self.trades_active:
-                self.trades_active[order.symbol] = dict()
-            trade = Trade.from_request(order, quote)
-            self.trades_active[order.symbol][trade.UID] = trade
-        else:
-            if order.symbol not in self.trades_active:
-                trade = Trade.from_request(order, quote)
-                self.trades_active[order.symbol] = trade
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def on_order_filled(self, order: Order, rules: Rules = None, quote: Quote = None):
+        symbol_key = (order.symbol.venue, order.symbol.symbol)
+        if order.check_filled(quote):
+            reject = self.check_margin(order, rules, quote)
+            if (reject is not None): return reject
+            order.status = Order.Status.FILLED
+            self.orders_closed[order.UID] = order
+            self.orders_active.pop(order.UID)
+            if self.is_hedging:
+                trade: Trade = Trade(order, quote.time_event)
+                self.trades_active[symbol_key][order.UID] = trade
             else:
-                trade = self.trades_active[order.symbol]
-                trade.on_fill(order)
-            if (trade.size == 0):
-                self.trades_active[order.symbol].pop(trade.UID)
-        
-        self.trade_count = self.trade_count + 1
-        self.orders_active[order.symbol].pop(trade.UID)
-        self.order_count = self.order_count - 1
-        return trade
+                trade: Trade = self.trades_active[symbol_key]
+                if (trade is not None): trade.on_fill(order)
+                else: self.trades_active[symbol_key] = Trade(
+                        order, time_place = quote.time_event)        
+            return trade
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def check_trade(self, trade: Trade, rules: Rules = None, quote: Quote = None):
-        # - Check if "trade" closed upon SL/TP/"size = 0". If wasn't, return None.
-        # - Change the trade's status to CLOSED, return the CLOSED "trade" itself.
-        if not trade.check_closed(quote): return None
-        return trade
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def on_trade_closed(self, trade: Trade, rules: Rules = None, quote: Quote = None):
+        symbol_key = (trade.symbol.venue, trade.symbol.symbol)
+        self.uPNL = self.uPNL - trade.pnl
+        self.nav = self.nav - trade.asset_value
+        self.gav = self.gav - abs(trade.asset_value)
+        if trade.check_closed(quote):
+            trade.status = Trade.Status.CLOSED
+            self.trades_closed[trade.UID] = trade
+            self.trades_active.pop(trade.UID)
+            if self.is_hedging:
+                self.trades_active[symbol_key].pop(trade.UID)
+            else: self.trades_active[symbol_key] = None
+            self.rPNL = self.rPNL + trade.pnl
+            self.balance = self.balance + trade.pnl
+            return trade
+        self.uPNL = self.uPNL + trade.pnl
+        self.nav = self.nav + trade.asset_value
+        self.gav = self.gav + abs(trade.asset_value)
+        

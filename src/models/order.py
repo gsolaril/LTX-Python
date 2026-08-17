@@ -415,7 +415,7 @@ class Trade(Order):
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-OrderDictByUID, TradeDictByUID = dict[str, Order], dict[str, Trade]
+OrderDictByUID = dict[str, Order]; TradeDictByUID = dict[str, Trade]
 OrderDictBySym = dict[Tuple[str, str], Order | dict[str, Order]]
 TradeDictBySym = dict[Tuple[str, str], Trade | dict[str, Trade]]
 

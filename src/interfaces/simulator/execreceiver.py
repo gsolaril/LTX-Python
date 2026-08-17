@@ -56,8 +56,6 @@ class ExecReceiver(StreamingAgent):
     async def main(self):
         self.quotes = QuoteDict()
         self.n_orders = self.n_trades = 0
-        self.orders_active = OrderDict()
-        self.trades_active = TradeDict()
         ex_key = (self.stream_prefix, self.STREAM_MIDFIX, self.account.id)
         listen_to = {Redis.join(*ex_key)}
         for symbol in self.symbols.values():
@@ -98,54 +96,38 @@ class ExecReceiver(StreamingAgent):
         else: return
         self.time = obj.time_event
         self.quotes[symbol_key] = obj
-        responses = await self.clearing(*symbol_key)
-        if responses: await self.send_responses(*responses)
-         
+        await self.send_responses(
+            *(await self.order_clearing(*symbol_key)),
+            *(await self.trade_clearing(*symbol_key)),
+            self.account)
+
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def clearing(self, venue: str, symbol: str):
+    async def order_clearing(self, venue: str, symbol: str):
         symbol_key = (venue, symbol)
         quote: Quote = self.quotes[symbol_key]
         stuff_rejected = dict[str, OrderReject]()
 
-        orders_to_clear = dict[str, Order]()
-        for UID in list(self.orders_active[symbol_key]):
-            order: Order = self.orders_active[symbol_key][UID]
-            result = self.account.check_order(order, self.rules, quote)
-            if result is None: continue
-            elif isinstance(result, OrderReject):
-                stuff_rejected[result.UID] = result
-            self.orders_active[symbol_key].pop(UID)
-            self.account.orders_closed[UID] = order
-            self.account.orders_active.pop(UID)
-            orders_to_clear[UID] = order
-            if self.account.is_hedging:
-                trade: Trade = Trade(order, time_place = quote.time_event)
-                self.account.trades_active[symbol_key][UID] = trade
-            else:
-                trade: Trade = self.trades_active[symbol_key]
-                if (trade is not None): trade.on_fill(order)
-                else: self.trades_active[symbol_key] = Trade(
-                  order = order, time_place = quote.time_event)
+        orders_cleared = dict[str, Order]()
+        for UID in list(self.account.orders_active[symbol_key]):
+            order: Order = self.account.orders_active[symbol_key][UID]
+            result = self.account.on_order_filled(order, self.rules, quote)
+            if isinstance(result, OrderReject): stuff_rejected[UID] = result
+            elif (result is not None): orders_cleared[UID] = order
+        return [*orders_cleared.values(), *stuff_rejected.values()]
 
-        trades_to_clear = dict[str, Trade]()
-        for UID in list(self.trades_active[symbol_key]):
-            trade: Trade = self.trades_active[symbol_key][UID]
-            result = self.account.check_trade(trade, self.rules, quote)
-            if result is None: continue
-            elif isinstance(result, OrderReject):
-                stuff_rejected[result.UID] = result
-            self.account.trades_closed[UID] = trade
-            self.account.trades_active.pop(UID)
-            trades_to_clear[UID] = trade
-            if self.account.is_hedging:
-                self.trades_active[symbol_key].pop(UID)
-            else: self.trades_active[symbol_key] = dict()
-        
-        # TODO: Update GAV, NAV and PNL in the account!
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def trade_clearing(self, venue: str, symbol: str):
+        symbol_key = (venue, symbol)
+        quote: Quote = self.quotes[symbol_key]
+        stuff_rejected = dict[str, OrderReject]()
 
-        return [*orders_to_clear.values(),
-                *trades_to_clear.values(),
-                *stuff_rejected.values()]
+        trades_cleared = dict[str, Trade]()
+        for UID in list(self.account.trades_active[symbol_key]):
+            trade: Trade = self.account.trades_active[symbol_key][UID]
+            result = self.account.on_trade_closed(trade, self.rules, quote)
+            if isinstance(result, OrderReject): stuff_rejected[UID] = result
+            elif (result is not None): trades_cleared[UID] = trade
+        return [*trades_cleared.values(), *stuff_rejected.values()]
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def order_create(self, **payload):
@@ -158,29 +140,24 @@ class ExecReceiver(StreamingAgent):
         request = OrderCreate(account = self.account, symbol = symbol, **payload)
         response = self.account.on_order_create(request, self.rules, quote)
         return [response]
-
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def order_modify(self, **payload):
-        UID = payload.get("UID", None)
-        if (UID is None): return OrderReject.from_request(time = self.time,
-            reason = OrderReject.Reason.NOT_FOUND, request = payload)
-        order: Order = self.orders_active[UID]
-        symbol_key = (order.symbol.venue, order.symbol.symbol)
-        quote = self.quotes[symbol_key]
-        request = OrderModify(account = self.account, UID = UID, **payload)
-        response = self.account.on_order_modify(request, self.rules, quote)
-        order.on_modify(response)
-        return [response]
+        return await self.order_handle(delete = False, **payload)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def order_delete(self, **payload):
-        UID = payload.get("UID", None)
-        if (UID is None): return OrderReject.from_request(time = self.time,
-            reason = OrderReject.Reason.NOT_FOUND, request = payload)
+        return await self.order_handle(delete = True, **payload)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def order_handle(self, delete: bool, **payload):
+        if (UID is None): return OrderReject.from_request(
+            reason = OrderReject.Reason.NOT_FOUND,
+            time = self.time, request = payload)
         order: Order = self.orders_active[UID]
-        symbol_key = (order.symbol.venue, order.symbol.symbol)
-        quote = self.quotes[symbol_key]
-        request = OrderDelete(account = self.account, UID = UID, **payload)
-        response = self.account.on_order_delete(request, self.rules, quote)
+        UID = payload.pop("UID", None)
+        HandleClass = OrderDelete if delete else OrderModify
+        handle_func = order.on_delete if delete else order.on_modify
+        request = HandleClass(account = self.account, UID = UID, **payload)
+        quote = self.quotes[(order.symbol.venue, order.symbol.symbol)]
+        response = handle_func(request, self.rules, quote)
         return [response]
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄
