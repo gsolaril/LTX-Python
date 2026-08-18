@@ -65,21 +65,26 @@ class OrderReject(Message):
     VERBOSE_REPR: ClassVar[str] = "#{UID}: {reason} - {message}"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class Reason(StrEnum):
-        UNKNOWN_UID = "{subject} ({summary}) not found."
-        UNKNOWN_SYMBOL = "{subject} ({summary}) has an invalid venue/symbol: \"{symbol}\"."
-        WRONG_ACCOUNT = "{subject} ({summary}) has an invalid account: \"{account}\". Actual: \"{actual}\""
-        WRONG_ENTRY = "{subject} ({summary}) has an invalid execution price. Current: {curr_price:.5f}"
-        WRONG_SL = "{subject} ({summary}) has an invalid SL at {price_sl:.5f}. Current price: {curr_price:.5f}"
-        WRONG_TP = "{subject} ({summary}) has an invalid TP at {price_tp:.5f}. Current price: {curr_price:.5f}"
-        WRONG_SIZE = "{subject} ({summary}) has an invalid size of {size:.5f}. Min allowed: {min_order_size:.5f}"
-        EXPIRED = "{subject} ({summary}) expired at {expiration:%Y/%m/%d %X}. Current time: {curr_time:%Y/%m/%d %X}"
-        NO_MODIFY = "{subject} ({summary}) has nothing to modify."
-        MAX_MARGIN = "{subject} ({summary}) requires a margin of {req:.2f}. Current: {margin:.2f}. Max allowed: {max_margin:.2f}"
-        MAX_ORDERS = "{subject} ({summary}) rejected due to max number of orders. Current: {current}. Max allowed: {max_allowed}"
-        MAX_FREQ = "{subject} ({summary}) over frequency limit. Since last: {current:.0f}us. Min allowed: {min_allowed:.0f}us"
-        UNKNOWN = "{subject} ({summary}) rejected due to unknown reason."
+        UNKNOWN_UID = "{subject!r} ({summary}) not found."
+        UNKNOWN_SYMBOL = "{subject!r} ({summary}) has an invalid venue/symbol: \"{symbol}\"."
+        WRONG_ACCOUNT = "{subject!r} ({summary}) has an invalid account: \"{account}\". Actual: \"{actual}\""
+        WRONG_ENTRY = "{subject!r} ({summary}) has an invalid execution price. Current: {curr_price:.5f}"
+        WRONG_SL = "{subject!r} ({summary}) has an invalid SL at {price_sl:.5f}. Current price: {curr_price:.5f}"
+        WRONG_TP = "{subject!r} ({summary}) has an invalid TP at {price_tp:.5f}. Current price: {curr_price:.5f}"
+        WRONG_STOP = "{subject!r} ({summary}) has an invalid {stop} at {stop_price:.5f}. Current price: {curr_price:.5f}"
+        WRONG_SIZE = "{subject!r} ({summary}) has an invalid size of {size:.5f}. Min allowed: {min_order_size:.5f}"
+        EXPIRED = "{subject!r} ({summary}) expired at {expiration:%Y/%m/%d %X}. Current time: {curr_time:%Y/%m/%d %X}"
+        NO_MODIFY = "{subject!r} ({summary}) has nothing to modify."
+        MAX_MARGIN = "{subject!r} ({summary}) requires a margin of {req:.2f}. Current: {margin:.2f}. Max allowed: {max_margin:.2f}"
+        MAX_ORDERS = "{subject!r} ({summary}) rejected due to max number of orders. Current: {current}. Max allowed: {max_allowed}"
+        MAX_FREQ = "{subject!r} ({summary}) over frequency limit. Since last: {current:.0f}us. Min allowed: {min_allowed:.0f}"
+        UNKNOWN = "{subject!r} ({summary}) rejected due to unknown reason."
     reason: str = field(kw_only = True, init = False)
     message: str = field(kw_only = True, init = False)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __post_init__(self):
+        super().__post_init__()
+        Log.error(self)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def from_request(cls, reason: Reason, request: Message, quote: Quote = None, **kwargs):
@@ -116,7 +121,6 @@ class OrderMessage(Message):
     type: Type = field(kw_only = True, init = False, default = None)
     side: Side = field(kw_only = True, init = False, default = None)
     mode: Mode = field(kw_only = True, default = Mode.GTC)
-    VERBOSE_SLTP: ClassVar[str] = "For {side} order; {stop} ({stop_price:.5f}) must be {where} entry price ({price:.5f})"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def check_entry(self, quote: Quote = None):
         if (self.type == self.Type.MARKET): return True
@@ -134,29 +138,22 @@ class OrderMessage(Message):
         else: curr_time = quote.time_event
         if (self.expiration is None): return True
         elif (curr_time < self.expiration): return True
-        str_exp = self.expiration.strftime("%Y/%m/%d %X")
-        str_time = curr_time.strftime("%Y/%m/%d %X")
-        Log.error("Order already expired...\n => " \
-              f"(NOW) {str_time} > (EXP) {str_exp}")
         return False
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def check_stops(self, SL: bool, quote: Quote = None):
-        if SL: direction, stop, stop_price = 1, "SL", self.price_sl
-        else: direction, stop, stop_price = -1, "TP", self.price_tp
+        if SL: direction, stop_price = 1, self.price_sl
+        else: direction, stop_price = -1, self.price_tp
         if not stop_price: return True
         stop_price = float(stop_price)
         sign_entry = direction * self.side.value
         sign_curr = sign_entry * self.type.value
         curr_price = quote.mkt_price(self.side == self.Side.SELL)
-        eargs = {"curr_price": curr_price, "stop_price": stop_price,
-          "stop": stop, "side": self.side.name, "price": self.price}
         if (self.type != self.Type.MARKET):
             diff_entry_stop = (self.price - stop_price) * sign_entry
             if (quote.symbol.min_price_diff <= diff_entry_stop): return True
         elif (curr_price is not None):
             diff_curr_stop = (curr_price - stop_price) * sign_curr
             if (quote.symbol.min_price_diff <= diff_curr_stop): return True
-        Log.error(self.VERBOSE_SLTP.format(**eargs))
         return False
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def reject(self, quote: Quote = None):
@@ -178,9 +175,7 @@ class OrderCreate(OrderMessage):
     symbol: Symbol = field(kw_only = True)
     comment: str = field(kw_only = True, default = None)
     MAX_COMMENT: ClassVar[int] = 64
-    VERBOSE_MIN_SIZE: ClassVar[str] = "Order size cannot be less than {}"
     VERBOSE_REPR: ClassVar[str] = "#{UID}: {side} {size} \"{symbol!r}\" @ {price:.5f}"
-    VERBOSE_MAX_COMMENT: ClassVar[str] = f"Comment can't have more than {MAX_COMMENT} characters: \"{{0}}\""
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
@@ -193,14 +188,10 @@ class OrderCreate(OrderMessage):
         self.side = self.Side.BUY if (self.size >= 0) else self.Side.SELL
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def check_comment(self):
-        if (len(self.comment) < self.MAX_COMMENT): return True
-        error = self.VERBOSE_MAX_COMMENT.format(self.comment)
-        Log.warning(error); return False
+        return (len(self.comment) < self.MAX_COMMENT)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def check_size(self):
-        if (abs(self.size) >= self.symbol.min_order_size): return True
-        Log.error(self.VERBOSE_MIN_SIZE.format(self.symbol.min_order_size))
-        return False
+        return (abs(self.size) >= self.symbol.min_order_size)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def reject(self, quote: Quote = None):
         if not self.check_size(): return OrderReject.from_request(
@@ -275,7 +266,8 @@ class Order(OrderCreate):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
-        if (self.EID is None): self.EID = self.UID
+        if (self.EID is None):
+            self.EID = self.UID
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __str__(self): return self.VERBOSE_REPR.format(UID = self.UID,
             EID = self.EID, price = self.price, side = self.side.name,
@@ -367,7 +359,6 @@ class Trade(Order):
     def __init__(self, order: Order, time_place: Timestamp = None):
         if (time_place is None): time_place = Timestamp.now(TZ)
         super().__init__(**order.__dict__)
-        self.check_expired(time_place)
         self.time_place = self.time_hedge = time_place
         self.price_avg = self.price_hedge = order.price
         self.trade_value = self.size = 0
@@ -403,8 +394,8 @@ class Trade(Order):
         if (abs(self.size) < self.symbol.min_order_size):
             self.status = Order.Status.CLOSED
             return True
-        bid = (self.side.flip == self.Side.SELL)
         self.time_hedge = quote.time_event
+        bid = (self.side.flip == self.Side.SELL)
         self.price_hedge = quote.mkt_price(bid, ranged = True)
         if not self.price_sl or not self.price_tp: return False
         diff_sl = (self.price_hedge - self.price_sl) * self.side.value
