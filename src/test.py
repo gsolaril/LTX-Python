@@ -2,8 +2,10 @@
 from argparse import ArgumentParser
 from unittest import TestCase, TestLoader, TextTestRunner, TextTestResult
 
-from src.models import *
-from src.interfaces.simulator import simulator_tests
+from src.models import tests as tests_models
+from src.connectors import tests as tests_connectors
+from src.monitoring import tests as tests_monitoring
+from src.interfaces import tests as tests_interfaces
 from src.utils import Log
 
 #███████████████████████████████████████████████████████████████████████████████████████████
@@ -29,8 +31,10 @@ def main():
     name: str = getattr(parser.parse_args(), "agent", None)
     assert isinstance(name, str), "Agent name is required"
     tests = dict[str, type[TestCase]](
-        **model_tests,
-        **simulator_tests,
+        **tests_models,
+        **tests_connectors,
+        **tests_monitoring,
+        **tests_interfaces,
     )
     Test: type[TestCase] = tests.get(name.lower(), None)
     if Test is None: parser.error(f"\"{name}\" not found")

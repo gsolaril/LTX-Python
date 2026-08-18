@@ -1,8 +1,9 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 from argparse import ArgumentParser
 
-from src.connectors import agents as agents_con
-from src.monitoring import agents as agents_mon
+from src.connectors import agents as agents_connectors
+from src.monitoring import agents as agents_monitoring
+from src.interfaces import agents as agents_interfaces
 from src.models import BaseAgent
 from src.utils import Log, EventLoop
 
@@ -15,8 +16,9 @@ def main():
     name: str = getattr(parser.parse_args(), "agent", None)
     assert isinstance(name, str), "Agent name is required"
     agents = dict[str, BaseAgent](
-        **agents_con,
-        **agents_mon
+        **agents_connectors,
+        **agents_monitoring,
+        **agents_interfaces,
     )
     agent: BaseAgent = agents.get(name.lower(), None)
     if agent is None:

@@ -1,14 +1,21 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-from .dataprovider import (DataProvider, FileReader, TSDBReader,
-                           TestFileReader, TestDataProvider)
+from .dataprovider import TSDBReader
+from .dataprovider import FileReader, TestFileReader
+from .dataprovider import DataProvider, TestDataProvider
+from .execreceiver import ExecReceiver, TestExecReceiver
+from .simulator import Simulator
 
-simulator_tests = {
+agents = {
+    "interfaces-dataprovider": DataProvider,
+    "interfaces-execreceiver": ExecReceiver,
+    "interfaces-simulator": Simulator,
+}
+tests = {
     "simulator/filereader": TestFileReader,
     "simulator/dataprovider": TestDataProvider,
+    "simulator/execreceiver": TestExecReceiver,
 }
-__all__ = ["DataProvider", "FileReader", "TSDBReader", "TestFileReader",
-           "TestDataProvider", "simulator_tests"]
+__all__ = ["DataProvider", "ExecReceiver", "Simulator", "agents", "tests"]
 
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-#███████████████████████████████████████████████████████████████████████████████████████████
+#███████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
