@@ -21,7 +21,7 @@ class Message:
     class Action(IntEnum): CREATE, MODIFY, DELETE, REJECT, ORDERS = range(5)
     ACTION: ClassVar[Action] = ...
     STREAM_KEY: ClassVar[str] = ...
-    VERBOSE_REPR: ClassVar[str] = ...
+    VERBOSE_REPR: ClassVar[str] = "#{UID}"
     DT_FORMAT: ClassVar[str] = "%Y/%m/%d %X.%f"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __hash__(self): return hash(self.UID)
@@ -65,8 +65,8 @@ class OrderReject(Message):
     VERBOSE_REPR: ClassVar[str] = "#{UID}: {reason} - {message}"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class Reason(StrEnum):
-        NOT_FOUND = "{subject} ({summary}) not found."
-        WRONG_SYMBOL = "{subject} ({summary}) has an invalid venue/symbol: \"{symbol}\"."
+        UNKNOWN_UID = "{subject} ({summary}) not found."
+        UNKNOWN_SYMBOL = "{subject} ({summary}) has an invalid venue/symbol: \"{symbol}\"."
         WRONG_ACCOUNT = "{subject} ({summary}) has an invalid account: \"{account}\". Actual: \"{actual}\""
         WRONG_ENTRY = "{subject} ({summary}) has an invalid execution price. Current: {curr_price:.5f}"
         WRONG_SL = "{subject} ({summary}) has an invalid SL at {price_sl:.5f}. Current price: {curr_price:.5f}"
@@ -232,7 +232,6 @@ class OrderCreate(OrderMessage):
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 @dataclass(frozen = True)
 class OrderModify(OrderMessage):
-    VERBOSE_REPR: ClassVar[str] = "#{UID}"
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def summary(self): return self.VERBOSE_REPR.format(UID = self.UID)
@@ -242,7 +241,6 @@ class OrderModify(OrderMessage):
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 @dataclass(frozen = True)
 class OrderDelete(Message):
-    VERBOSE_REPR: ClassVar[str] = "#{UID}"
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def summary(self): return self.VERBOSE_REPR.format(UID = self.UID)
@@ -300,6 +298,14 @@ class Order(OrderCreate):
         delay_us = 1e6 * (self.time_order - self.time).total_seconds()
         summary = f"{summary}, D+{delay_us:.0f}µs, E+{exp_in_us:.1f}s"
         return f"{summary} | {self.status})"
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def create(cls, account: Account, size: float, symbol: Symbol, price: float = None,
+                price_sl: float = None, price_tp: float = None, mode: Order.Mode = None,
+                expiration: Timestamp = None, comment: str = None):
+        return OrderCreate(account = account, size = size, symbol = symbol, price = price,
+            price_sl = price_sl, price_tp = price_tp, mode = mode, expiration = expiration,
+            comment = comment)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def modify(self, quote: Quote = None, **kwargs):
         to_modify = dict()
@@ -318,7 +324,6 @@ class Order(OrderCreate):
             if pop: to_modify.pop(field)
 
         reason: OrderReject.Reason = None
-
         curr_time = None if (quote is None) else quote.time_event
         modify = OrderModify(account = self.account, UID = self.UID,
             time = curr_time, **to_modify)
@@ -327,8 +332,8 @@ class Order(OrderCreate):
         if (reason is not None): return OrderReject.from_request(
             request = modify, reason = reason, quote = quote)
         else: return modify
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def delete(self, quote: Quote = None):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def delete(self, quote: Quote = None, **kwargs):
         curr_time = None if (quote is None) else quote.time_event
         return OrderDelete(account = self.account, UID = self.UID,
             time = curr_time)
@@ -415,9 +420,8 @@ class Trade(Order):
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-OrderDictByUID = dict[str, Order]; TradeDictByUID = dict[str, Trade]
-OrderDictBySym = dict[Tuple[str, str], Order | dict[str, Order]]
-TradeDictBySym = dict[Tuple[str, str], Trade | dict[str, Trade]]
+OrderDict = dict[Symbol, dict[str, Order]]
+TradeDict = dict[Symbol, dict[str, Trade]]
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

@@ -7,11 +7,11 @@ from collections import defaultdict, OrderedDict
 from dataclasses import dataclass, field, Field
 from enum import Enum, EnumMeta, IntEnum
 from pandas import Timestamp, Timedelta
-from .order import OrderCreate, Order, Trade
-from .order import OrderModify, OrderDelete, OrderReject
-from .order import OrderDictBySym as OrderDict
-from .order import TradeDictBySym as TradeDict
-from .data import BasePoint, Quote, Tick, Candle
+from .order import OrderCreate, OrderReject
+from .order import OrderModify, OrderDelete
+from .order import Order, OrderDict
+from .order import Trade, TradeDict
+from .data import BasePoint, Quote
 from .misc import DBClass
 from src.utils import TZ
 
@@ -100,17 +100,10 @@ class Rules:
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class Account(AccountState):
     is_hedging: bool = field(default = False)
-    orders_active: OrderDict = field(kw_only = True, default = OrderDict())
-    orders_closed: OrderDict = field(kw_only = True, default = OrderDict())
-    trades_active: TradeDict = field(kw_only = True, default = TradeDict())
-    trades_closed: TradeDict = field(kw_only = True, default = TradeDict())
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __post_init__(self):
-        super().__post_init__()
-        self.recon()
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def recon(self):
-        pass
+    orders_active: OrderDict = field(kw_only = True, init = True, default = dict())
+    trades_active: TradeDict = field(kw_only = True, init = True, default = dict())
+    orders_closed: OrderDict = field(kw_only = True, init = True, default = dict())
+    trades_closed: TradeDict = field(kw_only = True, init = True, default = dict())
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def payload(self): return {**super().payload,
@@ -139,16 +132,66 @@ class Account(AccountState):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def check_freq_orders(self, request: OrderCreate,
             rules: Rules = None, quote: Quote = None):
-                      
         since_last = quote.time_event - self.time
         since_last_us = 1e6 * since_last.total_seconds()
         if (since_last_us <= rules.max_freq_us): return None
         return OrderReject.from_request(request = request,
             reason = OrderReject.Reason.MAX_FREQ, quote = quote,
             since_last = since_last_us, max_freq_us = rules.max_freq_us)
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def on_order_filled(self, order: Order, rules: Rules = None, quote: Quote = None):
+        symbol_key = (order.symbol.venue, order.symbol.symbol)
+        if not order.check_filled(quote): return None
+        reject = self.check_margin(order, rules, quote)
+        if (reject is not None): return reject
+
+        order.status = Order.Status.FILLED
+        self.orders_closed[symbol_key][order.UID] = order
+        orders_symbol = self.orders_active[symbol_key]
+        trades_symbol = self.trades_active[symbol_key]
+        orders_symbol.pop(order.UID)
+        self.order_count -= 1
+        self.trade_count += 1
+        trade: Trade = None
+        if self.is_hedging:
+            trade = Trade(order, quote.time_event)
+            trades_symbol[order.UID] = trade
+        else:
+            trade = trades_symbol.get("NETTING", None)
+            if (trade is not None): trade.on_fill(order)
+            else: 
+                trade = Trade(order, quote.time_event)
+                trades_symbol["NETTING"] = trade
+        return trade
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def on_trade_closed(self, trade: Trade, rules: Rules = None, quote: Quote = None):
+        symbol_key = (trade.symbol.venue, trade.symbol.symbol)
+        self.uPNL = self.uPNL - trade.pnl
+        self.nav = self.nav - trade.asset_value
+        self.gav = self.gav - abs(trade.asset_value)
+        if not trade.check_closed(quote):
+            self.uPNL = self.uPNL + trade.pnl
+            self.nav = self.nav + trade.asset_value
+            self.gav = self.gav + abs(trade.asset_value)
+            return None
+
+        trade.status = Trade.Status.CLOSED
+        trades_symbol = self.trades_active[symbol_key]
+        self.trades_closed[symbol_key][trade.UID] = trade
+        trades_symbol.pop(trade.UID)
+        self.trade_count -= 1
+        if self.is_hedging:
+            trades_symbol.pop(trade.UID)
+        else: trades_symbol["NETTING"] = None
+        self.balance = self.balance + trade.pnl
+        self.rPNL = self.rPNL + trade.pnl
+        return trade
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_order_create(self, request: OrderCreate,
-            rules: Rules = None, quote: Quote = None):
+          rules: Rules = None, quote: Quote = None):
                           
         if (rules is not None):
             reject = self.check_margin(request, rules, quote)
@@ -164,58 +207,20 @@ class Account(AccountState):
         self.order_count = self.order_count + 1
         self.time = quote.time_event
         return order
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def on_order_modify(self, request: OrderModify,
-            rules: Rules = None, quote: Quote = None):
-        order: Order = self.orders_active.get(request.UID, None)
-        if (order is None): return OrderReject.from_request(quote = quote,
-            reason = OrderReject.Reason.NOT_FOUND, request = request)
-        order.on_modify(request)
-        return order
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def on_order_delete(self, request: OrderDelete,
-            rules: Rules = None, quote: Quote = None):
-        order: Order = self.orders_active.pop(request.UID, None)
-        if (order is None): return OrderReject.from_request(quote = quote,
-            reason = OrderReject.Reason.NOT_FOUND, request = request)
-        order.on_delete(request)
-        return order
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def on_order_filled(self, order: Order, rules: Rules = None, quote: Quote = None):
-        symbol_key = (order.symbol.venue, order.symbol.symbol)
-        if order.check_filled(quote):
-            reject = self.check_margin(order, rules, quote)
-            if (reject is not None): return reject
-            order.status = Order.Status.FILLED
-            self.orders_closed[order.UID] = order
-            self.orders_active.pop(order.UID)
-            if self.is_hedging:
-                trade: Trade = Trade(order, quote.time_event)
-                self.trades_active[symbol_key][order.UID] = trade
-            else:
-                trade: Trade = self.trades_active[symbol_key]
-                if (trade is not None): trade.on_fill(order)
-                else: self.trades_active[symbol_key] = Trade(
-                        order, time_place = quote.time_event)        
-            return trade
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def on_trade_closed(self, trade: Trade, rules: Rules = None, quote: Quote = None):
-        symbol_key = (trade.symbol.venue, trade.symbol.symbol)
-        self.uPNL = self.uPNL - trade.pnl
-        self.nav = self.nav - trade.asset_value
-        self.gav = self.gav - abs(trade.asset_value)
-        if trade.check_closed(quote):
-            trade.status = Trade.Status.CLOSED
-            self.trades_closed[trade.UID] = trade
-            self.trades_active.pop(trade.UID)
-            if self.is_hedging:
-                self.trades_active[symbol_key].pop(trade.UID)
-            else: self.trades_active[symbol_key] = None
-            self.rPNL = self.rPNL + trade.pnl
-            self.balance = self.balance + trade.pnl
-            return trade
-        self.uPNL = self.uPNL + trade.pnl
-        self.nav = self.nav + trade.asset_value
-        self.gav = self.gav + abs(trade.asset_value)
-        
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def check_order_exists(self, request: OrderModify | OrderDelete, quote: Quote):
+        if (request.UID in self.orders_active): return self.orders_active[request.UID]
+        elif (request.UID in self.trades_active): return self.trades_active[request.UID]
+        else: return OrderReject.from_request(reason = OrderReject.Reason.UNKNOWN_UID,
+            request = request, quote = quote)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def on_order_modify(self, request: OrderModify, quote: Quote = None):
+        obj: Order | Trade = self.check_order_exists(request, quote)
+        if not isinstance(obj, OrderReject): obj.on_modify(request)
+        return obj
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def on_order_delete(self, request: OrderDelete, quote: Quote = None):
+        obj: Order | Trade = self.check_order_exists(request, quote)
+        if not isinstance(obj, OrderReject): obj.on_delete(request)
+        return obj
