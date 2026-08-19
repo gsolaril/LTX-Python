@@ -1,13 +1,22 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 from numpy import inf as INF, sign
 from enum import IntEnum, StrEnum
-from typing import Tuple, Set, List, ClassVar
+from typing import Tuple, Set, List
+from typing import ClassVar, Callable
 from dataclasses import asdict, dataclass, field
 from pandas import Timestamp, Timedelta
 from .misc import Symbol
 from .account import Account
 from .data import Quote, Tick, Candle
 from src.utils import Log, TZ, b64
+
+STREAMABLES = list[type]()
+LOG_RESPONSES = dict[type, Callable]()
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+def streamable(cls: type):
+    LOG_RESPONSES[cls] = cls.logger
+    STREAMABLES.append(cls)
+    return dataclass(cls)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -60,10 +69,11 @@ class Message:
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+#▄▄▄▄▄▄▄▄▄▄▄▄
+@streamable#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class OrderReject(Message):
     VERBOSE_REPR: ClassVar[str] = "#{UID}: {reason} - {message}"
+    logger: ClassVar[Callable] = Log.error
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class Reason(StrEnum):
         UNKNOWN_UID = "{subject!r} ({summary}) not found."
@@ -172,14 +182,15 @@ class OrderMessage(Message):
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+#▄▄▄▄▄▄▄▄▄▄▄▄
+@streamable#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class OrderCreate(OrderMessage):
     size: float = field(kw_only = True)
     symbol: Symbol = field(kw_only = True)
     comment: str = field(kw_only = True, default = None)
     MAX_COMMENT: ClassVar[int] = 64
     VERBOSE_REPR: ClassVar[str] = "#{UID}: {side} {size} \"{symbol!r}\" @ {price:.5f}"
+    logger: ClassVar[Callable] = Log.info
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
@@ -226,18 +237,20 @@ class OrderCreate(OrderMessage):
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-@dataclass(frozen = True)
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+@streamable(frozen = True)
 class OrderModify(OrderMessage):
+    logger: ClassVar[Callable] = Log.info
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def summary(self): return self.VERBOSE_REPR.format(UID = self.UID)
     def __repr__(self): return self.summary
     def __str__(self): return self.summary
 
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-@dataclass(frozen = True)
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+@streamable(frozen = True)
 class OrderDelete(Message):
+    logger: ClassVar[Callable] = Log.info
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def summary(self): return self.VERBOSE_REPR.format(UID = self.UID)
@@ -246,8 +259,8 @@ class OrderDelete(Message):
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄
+#▄▄▄▄▄▄▄▄▄▄▄▄
+@streamable#█▄▄▄▄▄▄▄▄▄▄▄
 class Order(OrderCreate):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class Status(StrEnum):
@@ -260,6 +273,7 @@ class Order(OrderCreate):
     ALLOW_REMOVAL: ClassVar[Set[str]] = {"price_sl", "price_tp", "expiration"}
     VERBOSE_REPR: ClassVar[str] = "#{UID}({EID}): {side} {size} \"{symbol!r}\" @ {price:.5f}"
     STREAM_KEY: ClassVar[str] = "{venue}|{account_id}|ORDERS"
+    logger: ClassVar[Callable] = Log.success
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def from_request(cls, request: OrderCreate, quote: Quote = None):
@@ -358,8 +372,8 @@ class Order(OrderCreate):
     
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄▄▄▄
+#▄▄▄▄▄▄▄▄▄▄▄▄
+@streamable#█▄▄▄▄▄
 class Trade(Order):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class Status(StrEnum):
@@ -368,6 +382,7 @@ class Trade(Order):
     time_trade: Timestamp = field(kw_only = True, default = None)
     price_trade: float = field(kw_only = True, default = None)
     STREAM_KEY: ClassVar[str] = "{venue}|{account_id}|TRADES"
+    logger: ClassVar[Callable] = Log.success
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def from_order(cls, order: Order, quote: Quote = None):

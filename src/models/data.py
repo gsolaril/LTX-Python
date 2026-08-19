@@ -7,6 +7,12 @@ from typing import Any, Tuple, ClassVar, Callable
 from .misc import Symbol, TimeFrame
 from src.utils import TZ
 
+STREAMABLES = list[type]()
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+def streamable(cls: type):
+    STREAMABLES.append(cls)
+    return dataclass(cls)
+
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄
@@ -50,8 +56,8 @@ class DataPoint(BasePoint):
         payload = asdict(self)
         return {"stream": {"index": payload.pop("index")},
             "time": self.time_us, "payload": payload.pop("data")}
-#▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄▄▄▄▄▄▄▄
+#▄▄▄▄▄▄▄▄▄▄▄▄
+@streamable#█▄▄▄▄▄▄▄▄▄
 class Quote(BasePoint):
     symbol: Symbol = field(kw_only = True)
     STREAM_KEY: ClassVar[str] = "{venue}|{symbol}|{tf}"
@@ -68,8 +74,8 @@ class Quote(BasePoint):
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄▄▄
+#▄▄▄▄▄▄▄▄▄▄▄▄
+@streamable#█▄▄▄▄
 class Tick(Quote):
     pa: float = field(kw_only = True, default = None)
     qa: float = field(kw_only = True, default = None)
@@ -113,8 +119,8 @@ class Tick(Quote):
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄▄▄▄▄
+#▄▄▄▄▄▄▄▄▄▄▄▄
+@streamable#█▄▄▄▄▄▄
 class Candle(Quote):
     tf: TimeFrame = field(kw_only = True)
     volume: int = field(kw_only = True, default = None)

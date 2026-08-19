@@ -15,6 +15,12 @@ from .data import BasePoint, Quote
 from .misc import DBClass
 from src.utils import TZ
 
+STREAMABLES = list[type]()
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+def streamable(cls: type):
+    STREAMABLES.append(cls)
+    return dataclass(cls)
+
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄
@@ -96,8 +102,8 @@ class Rules:
     max_orders: int = field(kw_only = True, init = True, default = 100)
     max_trades: int = field(kw_only = True, init = True, default = 100)
 
-#▄▄▄▄▄▄▄▄▄▄▄
-@dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+#▄▄▄▄▄▄▄▄▄▄▄▄
+@streamable#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class Account(AccountState):
     is_hedging: bool = field(default = False)
     orders_active: OrderDict = field(kw_only = True, init = True, default = dict())

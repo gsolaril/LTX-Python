@@ -6,12 +6,13 @@ from typing import Any, ClassVar, Callable
 from dataclasses import dataclass, field
 from pandas import Timestamp, Timedelta
 from loguru import logger as Log
-from .data import Quote, AccountState
+from .data import STREAMABLES as DATA_STREAMABLES
+from .order import STREAMABLES as ORDER_STREAMABLES
+from .account import STREAMABLES as ACC_STREAMABLES
 from .misc import Symbol, TimeFrame
-from .order import Message, Order
 from src.utils import Postgres, Redis, TZ
 
-STREAMABLE_TYPES = [Quote, Message, Order, AccountState]
+STREAMABLES = [*DATA_STREAMABLES, *ORDER_STREAMABLES, *ACC_STREAMABLES]
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -105,10 +106,10 @@ class StreamingAgent(BaseAgent):
     XGROUP: ClassVar[str] = ...
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __post_init__(self):
+    def __post_init__(self): #FIXME: IMPORTANT
         if (self.stream_prefix is None):
             self.stream_prefix = self.STREAM_PREFIX
-        self.stream_format = dict.fromkeys(STREAMABLE_TYPES)
+        self.stream_format = dict.fromkeys(STREAMABLES)
         for model in self.stream_format.keys():
             stream_key = getattr(model, "STREAM_KEY")
             array = [self.stream_prefix, self.STREAM_MIDFIX, stream_key]
