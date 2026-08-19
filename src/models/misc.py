@@ -10,7 +10,7 @@ from pandas import Timestamp, Timedelta
 from .order import OrderCreate, Order, Trade
 from .order import OrderModify, OrderDelete, OrderReject
 from .order import OrderDict as OrderDict
-from .order import TradeDict as TradeDict
+from .order import TradeDictBySym as TradeDict
 from .data import BasePoint, Quote, Tick, Candle
 from src.utils import Log, TZ
 

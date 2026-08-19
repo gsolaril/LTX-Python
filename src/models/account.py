@@ -150,20 +150,24 @@ class Account(AccountState):
         self.orders_closed[symbol_key][order.UID] = order
         orders_symbol = self.orders_active[symbol_key]
         trades_symbol = self.trades_active[symbol_key]
-        orders_symbol.pop(order.UID)
-        self.order_count -= 1
-        self.trade_count += 1
-        trade: Trade = None
+        filled = Trade.from_order(order, quote)
+        self.order_count = self.order_count - 1
+        orders_symbol.pop(order.UID, None)
         if self.is_hedging:
-            trade = Trade(order, quote.time_event)
-            trades_symbol[order.UID] = trade
+            trades_symbol[order.UID] = filled
+            self.trade_count = self.trade_count + 1
         else:
             trade = trades_symbol.get("NETTING", None)
-            if (trade is not None): trade.on_fill(order)
-            else: 
-                trade = Trade(order, quote.time_event)
-                trades_symbol["NETTING"] = trade
-        return trade
+            if (trade is not None):
+                trade.check_hedged(filled)
+                if (trade.status == Trade.Status.HEDGED):
+                    self.on_trade_closed(trade, rules, quote)
+                    return None
+            else:
+                trades_symbol["NETTING"] = filled
+                self.trade_count = self.trade_count + 1
+                    
+        return filled
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_trade_closed(self, trade: Trade, rules: Rules = None, quote: Quote = None):
@@ -181,10 +185,10 @@ class Account(AccountState):
         trades_symbol = self.trades_active[symbol_key]
         self.trades_closed[symbol_key][trade.UID] = trade
         trades_symbol.pop(trade.UID)
-        self.trade_count -= 1
         if self.is_hedging:
             trades_symbol.pop(trade.UID)
         else: trades_symbol["NETTING"] = None
+        self.trade_count = self.trade_count - 1
         self.balance = self.balance + trade.pnl
         self.rPNL = self.rPNL + trade.pnl
         return trade
@@ -203,7 +207,8 @@ class Account(AccountState):
 
         order = Order.from_request(request, quote)
         if isinstance(order, OrderReject): return order
-        self.orders_active[order.UID] = order
+        symbol_key = (order.symbol.venue, order.symbol.symbol)
+        self.orders_active[symbol_key][order.UID] = order
         self.order_count = self.order_count + 1
         self.time = quote.time_event
         return order
@@ -212,8 +217,12 @@ class Account(AccountState):
     def check_order_exists(self, request: OrderModify | OrderDelete, quote: Quote):
         if (request.UID in self.orders_active): return self.orders_active[request.UID]
         elif (request.UID in self.trades_active): return self.trades_active[request.UID]
-        else: return OrderReject.from_request(reason = OrderReject.Reason.UNKNOWN_UID,
-            request = request, quote = quote)
+        elif not self.is_hedging:
+            symbol_key = (quote.symbol.venue, quote.symbol.symbol)
+            trade: Trade = self.trades_active[symbol_key]["NETTING"]
+            if (trade.UID == request.UID): return trade
+        return OrderReject.from_request(request = request, 
+            quote = quote, reason = OrderReject.Reason.UNKNOWN_UID)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_order_modify(self, request: OrderModify, quote: Quote = None):
         obj: Order | Trade = self.check_order_exists(request, quote)
@@ -222,7 +231,18 @@ class Account(AccountState):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_order_delete(self, request: OrderDelete, quote: Quote = None):
         obj: Order | Trade = self.check_order_exists(request, quote)
-        if not isinstance(obj, OrderReject): obj.on_delete(request)
+        if isinstance(obj, OrderReject): return obj
+        symbol_key = (obj.symbol.venue, obj.symbol.symbol)
+        obj.on_delete(request)
+        if isinstance(obj, Order):
+            self.orders_active[symbol_key].pop(obj.UID)
+            self.orders_closed[symbol_key][obj.UID] = obj
+            self.order_count = self.order_count - 1
+        elif isinstance(obj, Trade):
+            if self.is_hedging:
+                self.trades_active[symbol_key].pop(obj.UID)
+            else: self.trades_active["NETTING"] = None
+            self.trades_closed[symbol_key][obj.UID] = obj
         return obj
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
