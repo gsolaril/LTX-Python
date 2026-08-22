@@ -1,6 +1,7 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 import asyncio, heapq, random, struct, time
 from dataclasses import dataclass, field
+from collections import deque
 from pathlib import Path
 from tqdm import tqdm
 from pandas import Timestamp
@@ -10,10 +11,10 @@ from typing import List, Tuple, Dict, Set
 from typing import Mapping, ClassVar, TextIO
 from typing import Iterable, Callable, Generator
 from mmap import mmap, ACCESS_READ as MMAP_READ
-from src.models import StreamingAgent
-from src.models import DataPoint, Tick, Candle
+from src.models import StreamingAgent, Tick, Candle
 from src.models import TimeFrame, Symbol, SymbolDict
-from src.utils import ClickHouse, Redis, b64, Config, TZ, EventLoop
+from src.utils import ClickHouse, Redis, b64
+from src.utils import Config, TZ, EventLoop, Log
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -26,6 +27,9 @@ from src.utils import ClickHouse, Redis, b64, Config, TZ, EventLoop
 #   kind: 0=Tick, 1=Candle, 2=other  (tick before candle at equal event time)
 RowTuple = Tuple
 HeapEntry = Tuple[int, str, str, int, int, int, RowTuple]
+
+#███████████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 KIND_TICK, KIND_CANDLE, KIND_OTHER = 0, 1, 2
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataReader:
@@ -343,27 +347,71 @@ class DataProvider(StreamingAgent):
     STREAM_PREFIX: ClassVar[str] = "BTX-"
     STREAM_MIDFIX: ClassVar[str] = "DATA"
     XGROUP: ClassVar[str] = Redis.Group.DATA
-    btid: str = field(default_factory = b64)
-    reader_mode: str = field(default = "tsdb")
-    time_since: Timestamp = field(default_factory = lambda: Timestamp.min.tz_localize("UTC"))
-    time_until: Timestamp = field(default_factory = lambda: Timestamp.max.tz_localize("UTC"))
-    timeframes: Set[str] = field(default_factory = set)
-    symbols: SymbolDict = field(default_factory = dict)
+    id: str = field(init = True, default_factory = b64)
+    symbols: SymbolDict = field(init = True)
+    timeframes: Set[str] = field(init = True)
+    time_since: Timestamp = field(init = True, default = None)
+    time_until: Timestamp = field(init = True, default = None)
+    reader_mode: str = field(init = True, default = "tsdb")
+    wait_response: bool = field(init = True, default = True)
+    TS_SINCE_DEF: ClassVar[Timestamp] = Timestamp.min.tz_localize(TZ)
+    TS_UNTIL_DEF: ClassVar[Timestamp] = Timestamp.max.tz_localize(TZ)
+    VERBOSE_ERROR_NORESP: ClassVar[str] = "No response from \"{0}\""
+    VERBOSE_ERROR_UNPHASED: ClassVar[str] = "Unphased item: {0} != {1}"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Redis.stream#█▄▄▄▄▄
     async def main(self):
-        async for item in self.reader: yield item
-    
+        last_time_us: int = 0
+        error = self.VERBOSE_ERROR_NORESP.format(self.id)
+        xstreams = {self.stream_prefix: self.XGROUP}
+        queue = deque[Tick | Candle]()
+        async for item in self.reader:
+            if item.INTERVAL_BASED:
+                if (len(queue) == 0):
+                    last_time_us = item.time_us
+                    queue.appendleft(item); continue
+                if (item.time_us <= last_time_us):
+                    queue.appendleft(item); continue
+                rem = len(queue)
+                while (len(queue) > 0):
+                    prev_item = queue.pop()
+                    prev_item.rem = (rem := rem - 1)
+                    yield prev_item
+
+            else: yield item
+            if not self.wait_response: continue
+            response = await Redis.xread(self, xstreams)
+            if not response: Log.error(error); continue
+            self.process_response(response, last_time_us)
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def process_response(self, response: Tuple, last_time_us: int):
+        check_id: str = b64(last_time_us)
+        payload: dict = None
+        for _, messages in response:
+            for _, payload in messages:
+                message_id = "NO_CID"
+                if isinstance(payload, dict):
+                    message_id = payload.pop("cid", message_id)
+                    if (message_id == check_id): return
+                Log.error(self.VERBOSE_ERROR_UNPHASED
+                        .format(message_id, check_id))
+
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         self.reader_mode = self.reader_mode.upper()
-        self.stream_prefix = self.STREAM_PREFIX + self.btid
-        args = {"timeframes": self.timeframes, "symbols": self.symbols,
-            "time_since": self.time_since, "time_until": self.time_until}
+        self.stream_prefix = self.STREAM_PREFIX + self.id
+        if (self.time_since is None): self.time_since = self.TS_SINCE_DEF
+        if (self.time_until is None): self.time_until = self.TS_UNTIL_DEF
+        if (self.time_since.tz is None): self.time_since = self.time_since.tz_localize(TZ)
+        if (self.time_until.tz is None): self.time_until = self.time_until.tz_localize(TZ)
+        args = {"timeframes": self.timeframes, "time_since": self.time_since, "symbols": self.symbols,
+            "time_until": self.time_until}
         if (self.reader_mode == "FILE"): self.reader = FileReader(**args)
         elif (self.reader_mode == "TSDB"): self.reader = TSDBReader(**args)
         else: raise ValueError(f"Invalid reader mode: {self.reader_mode}")
         super().__post_init__()
+        self._procs[f"DataProvider/main"] = self.main
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

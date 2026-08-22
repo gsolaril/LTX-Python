@@ -23,6 +23,7 @@ class BasePoint:
     STREAM_KEY: ClassVar[str] = ...
     INDEX_KEYS: ClassVar[list[str]] = ...
     CACHE_KEYS: ClassVar[list[str]] = ...
+    INTERVAL_BASED: ClassVar[bool] = False
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         now = Timestamp.now(TZ)
@@ -132,6 +133,8 @@ class Candle(Quote):
     hb: float = field(kw_only = True, default = None)
     lb: float = field(kw_only = True, default = None)
     cb: float = field(kw_only = True, default = None)
+    rem: int = field(kw_only = True, default = None)
+    INTERVAL_BASED: ClassVar[bool] = True
     INDEX_KEYS: ClassVar[list[str]] = ["tf"] + Quote.INDEX_KEYS.copy()
     CACHE_KEYS: ClassVar[list[str]] = ["oa", "ha", "la", "ca", "ob", "hb", "lb", "cb", "volume", "dus"]
     SCHEMA: ClassVar[dict[str, str]] = {
@@ -228,6 +231,7 @@ class Candle(Quote):
     @property#█▄▄▄▄▄▄▄
     def __dict__(self):
         payload = {key: getattr(self, key) for key in self.CACHE_KEYS}
+        if (self.rem is not None): payload["rem"] = self.rem
         stream_key = {"venue": self.symbol.venue, "symbol": self.symbol.symbol, "tf": self.tf.name}
         return {"stream": stream_key, "time": self.time_us, "payload": payload}
 
