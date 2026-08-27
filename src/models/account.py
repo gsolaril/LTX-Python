@@ -221,11 +221,13 @@ class Account(AccountState):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def check_order_exists(self, request: OrderModify | OrderDelete, quote: Quote):
-        if (request.UID in self.orders_active): return self.orders_active[request.UID]
-        elif (request.UID in self.trades_active): return self.trades_active[request.UID]
+        symbol_key = (quote.symbol.venue, quote.symbol.symbol)
+        orders_active = self.orders_active[symbol_key]
+        trades_active = self.trades_active[symbol_key]
+        if (request.UID in orders_active): return orders_active[request.UID]
+        elif (request.UID in trades_active): return trades_active[request.UID]
         elif not self.is_hedging:
-            symbol_key = (quote.symbol.venue, quote.symbol.symbol)
-            trade: Trade = self.trades_active[symbol_key]["NETTING"]
+            trade: Trade = trades_active["NETTING"]
             if (trade.UID == request.UID): return trade
         return OrderReject.from_request(request = request, 
             quote = quote, reason = OrderReject.Reason.UNKNOWN_UID)

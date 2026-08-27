@@ -1,7 +1,5 @@
 **To be written as proper readme later... right now I am just using this to take notes.**
 
-**Why? Just because I want to**
-
 ---
 
 MetaTrader EA / MQL5 live in a **separate repo**: `/home/gaston/LTX-MT5` (not this tree).

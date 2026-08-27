@@ -119,7 +119,7 @@ class OrderReject(Message):
 class OrderMessage(Message):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class Side(IntEnum):
-        BUY = -1; SELL = -1
+        BUY = +1; SELL = -1
         #▄▄▄▄▄▄▄▄
         @property
         def flip(self): return self.BUY \
@@ -140,12 +140,12 @@ class OrderMessage(Message):
         if (self.type == self.Type.MARKET): return True
         elif (quote is None): return True
         curr_price = quote.mkt_price(self.side == self.Side.SELL)
+        min_price_diff = quote.symbol.min_price_diff
         diff_price = self.price - curr_price
         sign_trade = diff_price * self.side.value
         diff_price = abs(diff_price)
         self.type = self.Type(int(sign(sign_trade)))
-        if (min_stops is None): min_stops = 0
-        return (diff_price >= min_stops)
+        return (diff_price >= min_price_diff)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def check_expired(self, quote: Quote = None):
         if (quote is None): curr_time = Timestamp.now(TZ)
@@ -162,12 +162,13 @@ class OrderMessage(Message):
         sign_entry = direction * self.side.value
         sign_curr = sign_entry * self.type.value
         curr_price = quote.mkt_price(self.side == self.Side.SELL)
+        min_price_diff = quote.symbol.min_price_diff
         if (self.type != self.Type.MARKET):
             diff_entry_stop = (self.price - stop_price) * sign_entry
-            if (quote.symbol.min_price_diff <= diff_entry_stop): return True
+            if (min_price_diff <= diff_entry_stop): return True
         elif (curr_price is not None):
             diff_curr_stop = (curr_price - stop_price) * sign_curr
-            if (quote.symbol.min_price_diff <= diff_curr_stop): return True
+            if (min_price_diff <= diff_curr_stop): return True
         return False
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def reject(self, quote: Quote = None):
@@ -277,9 +278,8 @@ class Order(OrderCreate):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def from_request(cls, request: OrderCreate, quote: Quote = None):
-        reason: OrderReject.Reason = request.reject(quote = quote)
-        if not reason: return OrderReject(reason = reason,
-            request = request, time = quote.time_event)
+        reject: OrderReject = request.reject(quote = quote)
+        if (reject is not None): return reject
         return cls(time = quote.time_event, time_order = request.time,
             account = request.account, status = Order.Status.PLACED,
             UID = request.UID, **request.payload)
@@ -335,15 +335,14 @@ class Order(OrderCreate):
             pop |= (value_new == value_old)
             if pop: to_modify.pop(field)
 
-        reason: OrderReject.Reason = None
         curr_time = None if (quote is None) else quote.time_event
         modify = OrderModify(account = self.account, UID = self.UID,
             time = curr_time, **to_modify)
-        if not to_modify: reason = OrderReject.Reason.NO_MODIFY
-        else: reason = modify.reject(quote = quote)
-        if (reason is not None): return OrderReject.from_request(
-            request = modify, reason = reason, quote = quote)
-        else: return modify
+        if not to_modify: return OrderReject.from_request(quote = quote,
+            reason = OrderReject.Reason.NO_MODIFY, request = modify)
+        reject: OrderReject = modify.reject(quote = quote)
+        if (reject is not None): return reject
+        return modify
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def delete(self, quote: Quote = None, **kwargs):
         curr_time = None if (quote is None) else quote.time_event
@@ -457,7 +456,7 @@ class Trade(Order):
         self.time = delete.time
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def check_closed(self, quote: Quote = None):
-        if (self.status != Trade.Status.CLOSED): return False # TODO: double check this
+        if (self.status == Trade.Status.CLOSED): return False # TODO: double check this
         elif (self.status == Trade.Status.HEDGED): return True
         elif (abs(self.size) < self.symbol.min_order_size):
             self.status = Trade.Status.CLOSED; return True

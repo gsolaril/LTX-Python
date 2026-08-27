@@ -113,7 +113,7 @@ class StreamingAgent(BaseAgent):
         for model in self.stream_format.keys():
             stream_key = getattr(model, "STREAM_KEY")
             array = [self.stream_prefix, self.STREAM_MIDFIX, stream_key]
-            self.stream_format[model] = Redis.join(array)
+            self.stream_format[model] = Redis.join(*array)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def setup(self):

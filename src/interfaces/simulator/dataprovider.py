@@ -367,16 +367,14 @@ class DataProvider(StreamingAgent):
         queue = deque[Tick | Candle]()
         async for item in self.reader:
             if item.INTERVAL_BASED:
-                if (len(queue) == 0):
+                if (last_time_us < item.time_us):
                     last_time_us = item.time_us
-                    queue.appendleft(item); continue
-                if (item.time_us <= last_time_us):
-                    queue.appendleft(item); continue
-                rem = len(queue)
-                while (len(queue) > 0):
-                    prev_item = queue.pop()
-                    prev_item.rem = (rem := rem - 1)
-                    yield prev_item
+                    while len(queue):
+                        prev_item = queue.pop()
+                        prev_item.rem = len(queue)
+                        yield prev_item
+
+                queue.appendleft(item)
 
             else: yield item
             if not self.wait_response: continue
