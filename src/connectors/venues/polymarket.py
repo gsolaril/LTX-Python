@@ -27,16 +27,16 @@ class Polymarket(Venue):
     @dataclass#█▄▄▄▄▄▄▄▄▄▄
     class Event(BasePoint):
         index: str = field(kw_only = True, default = "IDS")
-        STREAM_KEY: ClassVar[str] = "Polymarket|GAMMA"
+        STREAM_KEY: ClassVar[str] = ["Polymarket", "GAMMA"]
         MAP: ClassVar[bidict[str, str]] = bidict()
         REF: ClassVar[dict[str, set]] = dict()
         MIN_UPD_FREQ: ClassVar[int] = 300
         MIN_UPD_TF: ClassVar[TimeFrame] = TimeFrame(
                     Timedelta(seconds = MIN_UPD_FREQ))
         #▄▄▄▄▄▄▄▄▄▄
-        @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-        def __dict__(self): return {"stream": self.STREAM_KEY,
-              "time": self.time_us, "payload": dict(self.MAP)}
+        @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+        def __dict__(self): return {"stream": self.stream,
+            "time": self.time_us, "payload": dict(self.MAP)}
         #▄▄▄▄▄▄▄▄▄▄▄▄▄
         @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def shift_keys(cls, shift: int = 1):
@@ -53,8 +53,8 @@ class Polymarket(Venue):
         @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         def redis_updater(cls, func: Callable = None):
             async def wrapped(src: Connector):
-                xstreams = {src.stream_format[cls]}
-                return await Redis.consume(func, src, xstreams, 1)
+                return await Redis.consume(
+                  func, src, {cls.stream}, 1)
             return wrapped
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -107,14 +107,12 @@ class PolymarketGamma(Connector, Polymarket):
     freq_redis_report: int = field(kw_only = True,
         default = Polymarket.Event.MIN_UPD_FREQ)
     VENUE: ClassVar[str] = Polymarket.VENUE
-    STREAM_MIDFIX: ClassVar[str] = "DATA"
     SYM_QUERY_BY: ClassVar[str] = "REGEX"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
         self._crons[self.update_ids] = Timedelta(seconds = self.freq_redis_report)
-        xkey = [self.stream_prefix, self.STREAM_MIDFIX, self.Event.STREAM_KEY]
-        self.stream_format[self.Event] = Redis.join(xkey)
+        self.stream_format[self.Event] = Redis.join(self.stream_prefix, self.Event.STREAM_KEY)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def _parse_ids(cls, event: Dict[str, Any]):

@@ -7,13 +7,13 @@ from collections import defaultdict, OrderedDict
 from dataclasses import dataclass, field, Field
 from enum import Enum, EnumMeta, IntEnum
 from pandas import Timestamp, Timedelta
-from .order import OrderCreate, OrderReject
+from .order import OrderCreate, Reject
 from .order import OrderModify, OrderDelete
 from .order import Order, OrderDict
 from .order import Trade, TradeDict
 from .data import BasePoint, Quote
 from .misc import DBClass
-from src.utils import TZ
+from src.utils import Redis, TZ
 
 STREAMABLES = list[type]()
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -35,9 +35,13 @@ class AccountState(BasePoint, DBClass):
     gav: float = field(kw_only = True, default = None)
     nav: float = field(kw_only = True, default = None)
     time: Timestamp = field(kw_only = True, default = None)
-    STREAM_KEY: ClassVar[str] = Order.STREAM_KEY + "|STATE"
+    STREAM_MIDFIX: ClassVar[str] = "ACC"
+    STREAM_KEY: ClassVar[list[str]] = ["{venue}", "{id}", "STATE"]
     BASIC_KEYS: ClassVar[list[str]] = ["balance", "equity", "margin"]
     INDEX_KEYS: ClassVar[list[str]] = ["venue", "account_id"]
+    #▄▄▄▄▄▄▄▄▄▄
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def stream(self): return self.stream_key(venue = self.venue, id = self.id)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
@@ -74,10 +78,9 @@ class AccountState(BasePoint, DBClass):
       "margin": self.margin, "gav": self.gav, "nav": self.nav, "uPNL": self.uPNL,
       "rPNL": self.rPNL, "uPRC": self.uPRC, "mPRC": self.mPRC}
     #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄
-    def __dict__(self):
-        stream_key = {"venue": self.venue, "account_id": self.id}
-        return {"stream": stream_key, "time": self.time_us, "payload": self.payload}
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __dict__(self): return {"stream": self.stream,
+        "time": self.time_us, "payload": self.payload}
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄
     def summary(self):
@@ -124,16 +127,16 @@ class Account(AccountState):
         margin_future = self.margin + margin_req
         mPRC_future = self.equity / abs(margin_future)
         if (mPRC_future <= rules.max_mPRC): return None
-        return OrderReject.from_request(request = request,
-            reason = OrderReject.Reason.MAX_MARGIN, quote = quote,
+        return Reject.from_request(request = request,
+            reason = Reject.Reason.MAX_MARGIN, quote = quote,
             req = margin_req, margin = self.margin, max_margin = max_margin) 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def check_num_orders(self, request: OrderCreate,
             rules: Rules = None, quote: Quote = None):
 
         if (self.order_count <= rules.max_orders): return None
-        return OrderReject.from_request(request = request, 
-            reason = OrderReject.Reason.MAX_ORDERS, quote = quote,
+        return Reject.from_request(request = request, 
+            reason = Reject.Reason.MAX_ORDERS, quote = quote,
             current = self.order_count, max_allowed = rules.max_orders)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def check_freq_orders(self, request: OrderCreate,
@@ -141,8 +144,8 @@ class Account(AccountState):
         since_last = quote.time_event - self.time
         since_last_us = 1e6 * since_last.total_seconds()
         if (since_last_us <= rules.max_freq_us): return None
-        return OrderReject.from_request(request = request,
-            reason = OrderReject.Reason.MAX_FREQ, quote = quote,
+        return Reject.from_request(request = request,
+            reason = Reject.Reason.MAX_FREQ, quote = quote,
             since_last = since_last_us, max_freq_us = rules.max_freq_us)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -212,7 +215,7 @@ class Account(AccountState):
             if (reject is not None): return reject
 
         order = Order.from_request(request, quote)
-        if isinstance(order, OrderReject): return order
+        if isinstance(order, Reject): return order
         symbol_key = (order.symbol.venue, order.symbol.symbol)
         self.orders_active[symbol_key][order.UID] = order
         self.order_count = self.order_count + 1
@@ -229,17 +232,17 @@ class Account(AccountState):
         elif not self.is_hedging:
             trade: Trade = trades_active["NETTING"]
             if (trade.UID == request.UID): return trade
-        return OrderReject.from_request(request = request, 
-            quote = quote, reason = OrderReject.Reason.UNKNOWN_UID)
+        return Reject.from_request(request = request, 
+            quote = quote, reason = Reject.Reason.UNKNOWN_UID)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_order_modify(self, request: OrderModify, quote: Quote = None):
         obj: Order | Trade = self.check_order_exists(request, quote)
-        if not isinstance(obj, OrderReject): obj.on_modify(request)
+        if not isinstance(obj, Reject): obj.on_modify(request)
         return obj
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_order_delete(self, request: OrderDelete, quote: Quote = None):
         obj: Order | Trade = self.check_order_exists(request, quote)
-        if isinstance(obj, OrderReject): return obj
+        if isinstance(obj, Reject): return obj
         symbol_key = (obj.symbol.venue, obj.symbol.symbol)
         obj.on_delete(request)
         if isinstance(obj, Order):

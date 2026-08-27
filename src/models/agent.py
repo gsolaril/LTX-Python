@@ -102,18 +102,13 @@ class StreamingAgent(BaseAgent):
     freq_redis_report: int = field(init = False, kw_only = True, default = 600)
     stream_prefix: str = field(init = False, kw_only = True, default = None)
     STREAM_PREFIX: ClassVar[str] = "LTX"
-    STREAM_MIDFIX: ClassVar[str] = ...
     XGROUP: ClassVar[str] = ...
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self): #FIXME: IMPORTANT
+        super().__post_init__()
         if (self.stream_prefix is None):
             self.stream_prefix = self.STREAM_PREFIX
-        self.stream_format = dict.fromkeys(STREAMABLES)
-        for model in self.stream_format.keys():
-            stream_key = getattr(model, "STREAM_KEY")
-            array = [self.stream_prefix, self.STREAM_MIDFIX, stream_key]
-            self.stream_format[model] = Redis.join(*array)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def setup(self):

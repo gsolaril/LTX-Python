@@ -144,6 +144,7 @@ class PostgresManager:
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+REDIS_SEP = "|"
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class RedisManager:
     VERBOSE_PERF = "Process \"{name}\" took {dus} μs, {cpu}% CPU, {ram}B RAM"
@@ -157,7 +158,7 @@ class RedisManager:
         0.8: lambda value: Log.warning("Queue is {:.0%} full!".upper().format(value)),
         0.95: lambda value: Log.critical("Queue is {:.0%} full!".upper().format(value)),
     }
-    SEP = "|"
+    SEP = REDIS_SEP
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class Group(enum.StrEnum):
         DATA, MONITOR, EXEC = "$", "$", "$"
@@ -205,7 +206,7 @@ class RedisManager:
         else: self._pending.append(payload)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def scan(self, src: Any, pattern: str = None):
-        if (pattern is None): pattern = src.stream_prefix + "|*"
+        if (pattern is None): pattern = self.join(src.stream_prefix, "*")
         async for K in self._client.scan_iter(pattern): yield K
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def xread(self, src: Any, streams: dict[str, str],
@@ -269,17 +270,7 @@ class RedisManager:
                 async for obj in gen:
                     results.append(obj)
                     if (obj is None): continue
-                    payload: dict = obj.__dict__
-                    stream_key = payload.pop("stream")
-                    formatter = src.stream_format.get(obj.__class__)
-                    if (formatter is None):
-                        for model, fmt in src.stream_format.items():
-                            if isinstance(obj, model):
-                                formatter = fmt; break
-                    if (formatter is None):
-                        raise KeyError(f"No stream_format for {obj.__class__!r}")
-                    payload["stream"] = str.format(formatter, **stream_key)
-                    self._enqueue(payload)
+                    self._enqueue(obj.__dict__)
                 return results
             return wrapped
         if func is None: return decorator
@@ -318,9 +309,8 @@ class RedisManager:
             else:
                 try:
                     msg: dict = await self._queue.get()
-                    stream = msg["stream"]
                     time_event = msg.get("time_event", msg["time"])
-                    fields = dict(msg["payload"])
+                    stream, fields = msg["stream"], dict(msg["payload"])
                     id = str(time_event)[: -3] + "-" + str(time_event)[-3 :]
                     fields["qdus"] = int(time.time() * 1e6 - time_event)
                     if stream not in self._streams: await self.add_streams(src, [stream])

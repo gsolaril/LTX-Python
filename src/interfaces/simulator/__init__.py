@@ -1,6 +1,6 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-from .dataprovider import TSDBReader
-from .dataprovider import FileReader, TestFileReader
+from .datareader import TSDBReader
+from .datareader import FileReader, TestFileReader
 from .dataprovider import DataProvider, TestDataProvider
 from .execreceiver import ExecReceiver, TestExecReceiver
 from .simulator import Simulator

@@ -5,10 +5,10 @@ from typing import Tuple, Set, List
 from typing import ClassVar, Callable
 from dataclasses import asdict, dataclass, field
 from pandas import Timestamp, Timedelta
-from .misc import Symbol
 from .account import Account
-from .data import Quote, Tick, Candle
-from src.utils import Log, TZ, b64
+from .data import Quote
+from .misc import Symbol
+from src.utils import Log, Redis, TZ, b64
 
 STREAMABLES = list[type]()
 LOG_RESPONSES = dict[type, Callable]()
@@ -29,9 +29,10 @@ class Message:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class Action(IntEnum): CREATE, MODIFY, DELETE, REJECT, ORDERS, TRADES = range(6)
     ACTION: ClassVar[Action] = ...
-    STREAM_KEY: ClassVar[str] = ...
+    STREAM_MIDFIX: ClassVar[str] = "EXEC"
     VERBOSE_REPR: ClassVar[str] = "#{UID}"
     DT_FORMAT: ClassVar[str] = "%Y/%m/%d %X.%f"
+    STREAM_KEY = ["{venue}", "{id}"]
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __hash__(self): return hash(self.UID)
     def __bool__(self): return True
@@ -53,25 +54,29 @@ class Message:
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def time_us(self): return int(self.time.timestamp() * 1e6)
     #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __dict__(self): return {"stream": {"venue": self.account.venue,
-            "account_id": self.account.id, "action": self.ACTION.name},
-            "time": self.time_us, "payload": self.payload}
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __dict__(self): return {"stream": self.stream,
+        "time": self.time_us, "payload": self.payload}
+    #▄▄▄▄▄▄▄▄▄▄
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def stream(self): return self.stream_key(
+          venue = self.account.venue,
+          id = self.account.id)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         # TODO: NAME OF THE PLACING CHANNEL HERE BELOW
         cls.VERBOSE_REPR = f"{cls.__name__}({cls.VERBOSE_REPR})"
         if ("ACTION" in cls.__dict__): return
-        action = cls.__name__.replace("Order", "")
-        cls.ACTION = Message.Action[action.upper()]
-        cls.STREAM_KEY = "{venue}|{account_id}|" + cls.ACTION.name
+        cls.ACTION = Message.Action[cls.__name__.replace("Order", "").upper()]
+        stream_key = [cls.STREAM_MIDFIX, *cls.STREAM_KEY, cls.ACTION.name]
+        cls.stream_key = Redis.join(stream_key).format
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄
-@streamable#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-class OrderReject(Message):
+@streamable#█▄▄▄▄▄▄▄▄
+class Reject(Message):
     VERBOSE_REPR: ClassVar[str] = "#{UID}: {reason} - {message}"
     logger: ClassVar[Callable] = Log.error
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -172,14 +177,14 @@ class OrderMessage(Message):
         return False
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def reject(self, quote: Quote = None):
-        if not self.check_expired(quote): return OrderReject.from_request(
-            request = self, quote = quote, reason = OrderReject.Reason.EXPIRED)
-        if not self.check_entry(quote): return OrderReject.from_request(
-            request = self, quote = quote, reason = OrderReject.Reason.WRONG_ENTRY)
-        if not self.check_stops(True, quote): return OrderReject.from_request(
-            request = self, quote = quote, reason = OrderReject.Reason.WRONG_SL)
-        if not self.check_stops(False, quote): return OrderReject.from_request(
-            request = self, quote = quote, reason = OrderReject.Reason.WRONG_TP)
+        if not self.check_expired(quote): return Reject.from_request(
+            request = self, quote = quote, reason = Reject.Reason.EXPIRED)
+        if not self.check_entry(quote): return Reject.from_request(
+            request = self, quote = quote, reason = Reject.Reason.WRONG_ENTRY)
+        if not self.check_stops(True, quote): return Reject.from_request(
+            request = self, quote = quote, reason = Reject.Reason.WRONG_SL)
+        if not self.check_stops(False, quote): return Reject.from_request(
+            request = self, quote = quote, reason = Reject.Reason.WRONG_TP)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -210,8 +215,8 @@ class OrderCreate(OrderMessage):
         return (abs(self.size) >= self.symbol.min_order_size)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def reject(self, quote: Quote = None):
-        if not self.check_size(): return OrderReject.from_request(
-            request = self, quote = quote, reason = OrderReject.Reason.WRONG_SIZE)
+        if not self.check_size(): return Reject.from_request(
+            request = self, quote = quote, reason = Reject.Reason.WRONG_SIZE)
         if not self.check_comment(): self.comment = self.comment[: self.MAX_COMMENT]
         return super().reject(quote = quote)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -273,12 +278,13 @@ class Order(OrderCreate):
     time_order: Timestamp = field(kw_only = True, init = True, default = None)
     ALLOW_REMOVAL: ClassVar[Set[str]] = {"price_sl", "price_tp", "expiration"}
     VERBOSE_REPR: ClassVar[str] = "#{UID}({EID}): {side} {size} \"{symbol!r}\" @ {price:.5f}"
-    STREAM_KEY: ClassVar[str] = "{venue}|{account_id}|ORDERS"
+    ACTION: ClassVar[Message.ACTION] = Message.ACTION.ORDERS
+    STREAM_MIDFIX: ClassVar[str] = "ACC"
     logger: ClassVar[Callable] = Log.success
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def from_request(cls, request: OrderCreate, quote: Quote = None):
-        reject: OrderReject = request.reject(quote = quote)
+        reject: Reject = request.reject(quote = quote)
         if (reject is not None): return reject
         return cls(time = quote.time_event, time_order = request.time,
             account = request.account, status = Order.Status.PLACED,
@@ -338,9 +344,9 @@ class Order(OrderCreate):
         curr_time = None if (quote is None) else quote.time_event
         modify = OrderModify(account = self.account, UID = self.UID,
             time = curr_time, **to_modify)
-        if not to_modify: return OrderReject.from_request(quote = quote,
-            reason = OrderReject.Reason.NO_MODIFY, request = modify)
-        reject: OrderReject = modify.reject(quote = quote)
+        if not to_modify: return Reject.from_request(quote = quote,
+            reason = Reject.Reason.NO_MODIFY, request = modify)
+        reject: Reject = modify.reject(quote = quote)
         if (reject is not None): return reject
         return modify
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -380,7 +386,7 @@ class Trade(Order):
     status: Status = field(kw_only = True, default = Status.OPENED)
     time_trade: Timestamp = field(kw_only = True, default = None)
     price_trade: float = field(kw_only = True, default = None)
-    STREAM_KEY: ClassVar[str] = "{venue}|{account_id}|TRADES"
+    ACTION: ClassVar[Message.ACTION] = Message.ACTION.TRADES
     logger: ClassVar[Callable] = Log.success
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

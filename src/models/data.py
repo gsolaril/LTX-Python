@@ -5,7 +5,7 @@ from sortedcontainers import SortedDict
 from dataclasses import dataclass, field, asdict
 from typing import Any, Tuple, ClassVar, Callable
 from .misc import Symbol, TimeFrame
-from src.utils import TZ
+from src.utils import Redis, TZ
 
 STREAMABLES = list[type]()
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -20,10 +20,16 @@ def streamable(cls: type):
 class BasePoint:
     time: Timestamp = field(kw_only = True, default = None)
     dus: int = field(kw_only = True, default = None)
-    STREAM_KEY: ClassVar[str] = ...
+    STREAM_KEY: ClassVar[list[str]] = ...
     INDEX_KEYS: ClassVar[list[str]] = ...
     CACHE_KEYS: ClassVar[list[str]] = ...
+    STREAM_MIDFIX: ClassVar[str] = "DATA"
     INTERVAL_BASED: ClassVar[bool] = False
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if (cls.STREAM_KEY is Ellipsis): return
+        cls.stream_key = Redis.join(cls.STREAM_MIDFIX, *cls.STREAM_KEY).format
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         now = Timestamp.now(TZ)
@@ -35,17 +41,24 @@ class BasePoint:
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def time_event(self): return self.time
     #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def time_us(self): return int(self.time.timestamp() * 1e6)
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def stream(self): return self.stream_key()
     #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __dict__(self): return {"stream": None,
-      "time": self.time_us, "payload": asdict(self)}
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def time_us(self): return int(self.time_event.timestamp() * 1e6)
+    #▄▄▄▄▄▄▄▄▄▄
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __dict__(self): return {"stream": self.stream,
+        "time": self.time_us, "payload": asdict(self)}
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataPoint(BasePoint):
     index: str = field(kw_only = True)
     data: dict = field(kw_only = True)
+    STREAM_KEY: ClassVar[list[str]] = ["{index}"]
+    #▄▄▄▄▄▄▄▄▄▄
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def stream(self): return self.stream_key(index = self.index)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -55,14 +68,15 @@ class DataPoint(BasePoint):
     @property#█▄▄▄▄▄▄▄
     def __dict__(self):
         payload = asdict(self)
-        return {"stream": {"index": payload.pop("index")},
+        return {"stream": self.stream,
             "time": self.time_us, "payload": payload.pop("data")}
 #▄▄▄▄▄▄▄▄▄▄▄▄
 @streamable#█▄▄▄▄▄▄▄▄▄
 class Quote(BasePoint):
     symbol: Symbol = field(kw_only = True)
-    STREAM_KEY: ClassVar[str] = "{venue}|{symbol}|{tf}"
+    CACHE_KEYS: ClassVar[list[str]] = ...
     INDEX_KEYS: ClassVar[list[str]] = ["venue", "symbol", "time"]
+    STREAM_KEY: ClassVar[list[str]] = ["{venue}", "{symbol}", "{tf}"]
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __lt__(self, other: "Quote"):
         if (self.time_event != other.time_event):
@@ -70,8 +84,17 @@ class Quote(BasePoint):
         if (self.symbol != other.symbol):
             return (self.symbol < other.symbol)
         return False
+    #▄▄▄▄▄▄▄▄▄▄
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def stream(self): return self.stream_key(
+        self.symbol.venue, self.symbol.symbol, "{tf}")
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def mkt_price(self, bid: bool, ranged: bool = False): ...
+    #▄▄▄▄▄▄▄▄▄▄
+    @property#█▄▄▄▄▄▄▄
+    def __dict__(self):
+        payload = {key: getattr(self, key) for key in self.CACHE_KEYS}
+        return {"stream": self.stream, "time": self.time_us, "payload": payload}
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -85,7 +108,9 @@ class Tick(Quote):
     CACHE_KEYS: ClassVar[list[str]] = ["pa", "qa", "pb", "qb", "dus"]
     SCHEMA: ClassVar[dict[str, str]] = {
         "time": "i64", "pa": "f32", "qa": "f32", "pb": "f32", "qb": "f32"}
-
+    #▄▄▄▄▄▄▄▄▄▄
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def stream(self): return super().stream_key(tf = "T1")
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
@@ -103,13 +128,6 @@ class Tick(Quote):
         time = f"{self.time:%Y/%m/%d %X.%f}"
         return f"Tick({self.symbol!r} @ {time} | " \
           f"A:{self.pa}/{self.qa}, B:{self.pb}/{self.qb})"
-
-    #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄
-    def __dict__(self):
-        payload = {key: getattr(self, key) for key in self.CACHE_KEYS}
-        stream_key = {"venue": self.symbol.venue, "symbol": self.symbol.symbol, "tf": "T1"}
-        return {"stream": stream_key, "time": self.time_us, "payload": payload}
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __lt__(self, other: "Tick"|"Candle"):
@@ -140,7 +158,9 @@ class Candle(Quote):
     SCHEMA: ClassVar[dict[str, str]] = {
         "time": "i64", "oa": "f32", "ha": "f32", "la": "f32", "ca": "f32",
         "ob": "f32", "hb": "f32", "lb": "f32", "cb": "f32", "volume": "f32"}
-
+    #▄▄▄▄▄▄▄▄▄▄
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def stream(self): return super().stream_key(tf = self.tf.name)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __repr__(self):
         if self.tf.is_unit("S"): interval = f"{self.time:%Y/%m/%d %X}-{self._time_close:%S}"
@@ -230,10 +250,9 @@ class Candle(Quote):
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄
     def __dict__(self):
-        payload = {key: getattr(self, key) for key in self.CACHE_KEYS}
-        if (self.rem is not None): payload["rem"] = self.rem
-        stream_key = {"venue": self.symbol.venue, "symbol": self.symbol.symbol, "tf": self.tf.name}
-        return {"stream": stream_key, "time": self.time_us, "payload": payload}
+        payload = super().__dict__
+        if (self.rem is not None): payload["payload"]["rem"] = self.rem
+        return payload
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __lt__(self, other: "Tick"|"Candle"):

@@ -72,7 +72,6 @@ class Venue:
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class StreamingBundle(Bundle):
-    STREAM_MIDFIX: ClassVar[str] = "DATA"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     @Redis.stream#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def resample(self, time: Timestamp = None):
@@ -117,19 +116,17 @@ class Connector(ControllableAgent):
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataConnector(Connector):
-    STREAM_MIDFIX: ClassVar[str] = "DATA"
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def local_to_stream(self, sources: set[str]):
-        kw = {"venue": self.VENUE, "symbol": None}
-        formatter = self.stream_format[Quote]
-        stream_names = set[str]()
+        kw = {"venue": self.VENUE}
+        streams = set[str]()
         for symbol in sources:
             kw["symbol"] = symbol
-            stream_names.add(
-                str.format(formatter, **kw, tf = "T1"))
-            for tf in TimeFrame: stream_names.add(
-                str.format(formatter, **kw, tf = tf.name))
-        return stream_names
+            streams.add(
+                Quote.stream_key(**kw, tf = "T1"))
+            for tf in TimeFrame: streams.add(
+                Quote.stream_key(**kw, tf = tf.name))
+        return streams
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def reconfig(self, sources: set[str]):
         await super().reconfig(sources)
@@ -141,7 +138,6 @@ class DataConnector(Connector):
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class ExecConnector(Connector):
-    STREAM_MIDFIX: ClassVar[str] = "EXEC"
     VERBOSE_EXEC: ClassVar[str] = "Order {0} {1}: {2}"
     VERBOSE_ERROR_OVER: ClassVar[str] = "Order map too large. Dropping oldest order...\n => {0!r}"
     XGROUP: ClassVar[str] = Redis.Group.EXEC
@@ -158,17 +154,15 @@ class ExecConnector(Connector):
         self._procs[name] = listen_orders
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def local_to_stream(self, sources: set[str]):
-        kw = {"venue": self.VENUE, "account_id": None}
-        stream_names = set[str]()
+        kw = {"venue": self.VENUE}
+        streams = set[str]()
         for account in sources:
-            kw["account_id"] = account
-            stream_names.add(str.format(
-                self.stream_format[Order], **kw))
-            for tf in TimeFrame: stream_names.add(str.format(
-                self.stream_format[Account], **kw,
-                symbol = "NAV", tf = tf.name))
+            kw["id"] = account
+            streams.add(Order.stream_key(**kw))
+            streams.add(Account.stream_key(**kw,
+                symbol = "NAV"))
                 
-        return stream_names
+        return streams
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def reconfig(self, sources: set[str]):
         await super().reconfig(sources)
@@ -179,8 +173,8 @@ class ExecConnector(Connector):
     async def listen_orders(self):
         xstreams = dict[str, str]()
         for account_id in self._sockets.keys():
-            xkey = self.stream_format[OrderCreate](
-              account_id = account_id, venue = self.VENUE)
+            xkey = OrderCreate.stream_key(
+                id = account_id, venue = self.VENUE)
             xstreams[xkey] = Redis.StreamGet.ALL.value
 
         while self.active:
