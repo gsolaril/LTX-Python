@@ -18,73 +18,7 @@ from .datareader import FileReader, TSDBReader, TestFileReader
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class DataProvider(StreamingAgent):
-    STREAM_PREFIX: ClassVar[str] = "BTX-"
-    XGROUP: ClassVar[str] = Redis.Group.DATA
-    id: str = field(init = True, default_factory = b64)
-    symbols: SymbolDict = field(init = True)
-    timeframes: Set[str] = field(init = True)
-    time_since: Timestamp = field(init = True, default = None)
-    time_until: Timestamp = field(init = True, default = None)
-    reader_mode: str = field(init = True, default = "tsdb")
-    wait_response: bool = field(init = True, default = True)
-    TS_SINCE_DEF: ClassVar[Timestamp] = Timestamp.min.tz_localize(TZ)
-    TS_UNTIL_DEF: ClassVar[Timestamp] = Timestamp.max.tz_localize(TZ)
-    VERBOSE_ERROR_NORESP: ClassVar[str] = "No response from \"{0}\""
-    VERBOSE_ERROR_UNPHASED: ClassVar[str] = "Unphased item: {0} != {1}"
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    @Redis.stream#█▄▄▄▄▄
-    async def main(self):
-        last_time_us: int = 0
-        error = self.VERBOSE_ERROR_NORESP.format(self.id)
-        xkey = Redis.join(self.stream_prefix, "CID")
-        xstreams = {xkey: self.XGROUP}
-        queue = deque[Tick | Candle]()
-        async for item in self.reader:
-            if item.INTERVAL_BASED:
-                if (last_time_us < item.time_us):
-                    last_time_us = item.time_us
-                    while len(queue):
-                        prev_item = queue.pop()
-                        prev_item.rem = len(queue)
-                        yield prev_item
-
-                queue.appendleft(item)
-
-            else: yield item
-            if not self.wait_response: continue
-            response = await Redis.xread(self, xstreams)
-            if not response: Log.error(error); continue
-            self.process_response(response, last_time_us)
-
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def process_response(self, response: Tuple, last_time_us: int):
-        check_id: str = b64(last_time_us)
-        payload: dict = None
-        for _, messages in response:
-            for _, payload in messages:
-                message_id = "NO_CID"
-                if isinstance(payload, dict):
-                    message_id = payload.pop("cid", message_id)
-                    if (message_id == check_id): return
-                Log.error(self.VERBOSE_ERROR_UNPHASED
-                        .format(message_id, check_id))
-
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def __post_init__(self):
-        self.reader_mode = self.reader_mode.upper()
-        self.stream_prefix = self.STREAM_PREFIX + self.id
-        if (self.time_since is None): self.time_since = self.TS_SINCE_DEF
-        if (self.time_until is None): self.time_until = self.TS_UNTIL_DEF
-        if (self.time_since.tz is None): self.time_since = self.time_since.tz_localize(TZ)
-        if (self.time_until.tz is None): self.time_until = self.time_until.tz_localize(TZ)
-        args = {"timeframes": self.timeframes, "time_since": self.time_since, "symbols": self.symbols,
-            "time_until": self.time_until}
-        if (self.reader_mode == "FILE"): self.reader = FileReader(**args)
-        elif (self.reader_mode == "TSDB"): self.reader = TSDBReader(**args)
-        else: raise ValueError(f"Invalid reader mode: {self.reader_mode}")
-        super().__post_init__()
-        self._procs[f"DataProvider/main"] = self.main
-
+    ...
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
