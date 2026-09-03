@@ -1,18 +1,18 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import heapq, random, struct, time
-from pathlib import Path
+import heapq, random, struct, time, numpy
 from tqdm import tqdm
-from pandas import Timestamp
+from pathlib import Path
 from unittest import TestCase
 from tempfile import TemporaryDirectory
+from pandas import Timestamp, Timedelta
+from pandas import Series, DataFrame, concat
 from typing import List, Tuple, Dict, Set
-from typing import Mapping, ClassVar, TextIO
 from typing import Iterable, Callable
+from typing import Mapping, ClassVar, TextIO
 from mmap import mmap, ACCESS_READ as MMAP_READ
 from src.models import Tick, Candle
 from src.models import TimeFrame, Symbol, SymbolDict
-from src.utils import ClickHouse
-from src.utils import Config, TZ
+from src.utils import ClickHouse, Config, TZ
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -337,6 +337,152 @@ class TSDBReader(DataReader):
 
         return queries        
 
+#███████████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ABList = List[Tuple[float, float]]
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class FakeSymbol(Symbol):
+    DEF_TICKS: ClassVar[int] = 10000
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, venue: str, symbol: str,
+          prices_init: ABList, model: Callable,
+          ticks: int = None):
+
+        price = prices_init[0][0]
+        min_price_diff = self.naive_point(price)
+        min_order_size, quote_value = 0.01, 1.0
+        min_stops_diff = 10 * min_price_diff
+        contract_size = 1 / min_price_diff
+
+        self.prices = prices_init.copy()
+        self.model, self.ticks = model, ticks
+        super().__init__(venue, symbol, symbol, "USD", min_stops_diff,
+          min_price_diff, min_order_size, contract_size, quote_value)
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __next__(self):
+        if (self.ticks is not None):
+            if (self.ticks > 0): self.ticks = self.ticks - 1
+            else: raise StopIteration(f"\"{self!r}\" depleted")
+        try: ask, bid = self.model(self.prices)
+        except Exception as EXC: raise StopIteration(repr(EXC))
+        self.prices.append((ask, bid))
+        self.prices.pop(0)
+        return (ask, bid)
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __iter__(self):
+        while True: yield next(self)
+
+# Fake symbols with predefined models
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class FakeSymbolLinear(FakeSymbol):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, symbol_key: Tuple[str, str], a0: float,
+              b0: float, trend: int = None, ticks: int = None):
+        super().__init__(*symbol_key, [(a0, b0)], self.model, ticks)
+        self.trend = trend if trend else +1
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def model(self, prices: ABList):
+        ask, bid = prices[-1]
+        incr = self.trend * self.min_price_diff
+        return (ask + incr, bid + incr)
+
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class FakeSymbolCyclic(FakeSymbol):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, symbol_key: Tuple[str, str], a0: float,
+          b0: float, ampl: float, period: int, ticks: int = None):
+        diff_init = ampl * numpy.sin(freq := 2 * numpy.pi / period)
+        prices_init = [(a0, b0), (a0 + diff_init, b0 + diff_init)]
+        super().__init__(*symbol_key, prices_init, self.model, ticks)
+        self.cosfq = numpy.cos(freq)
+        self.off_ask = 2 * a0 * (1 - self.cosfq)
+        self.off_bid = 2 * b0 * (1 - self.cosfq)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def model(self, prices: ABList):
+        a1, b1, a2, b2 = *prices[-1], *prices[-2]
+        ad = self.off_ask + (2 * self.cosfq - 1) * a1 - a2
+        bd = self.off_bid + (2 * self.cosfq - 1) * b1 - b2
+        ad = numpy.sign(ad) * max(abs(ad), self.min_price_diff)
+        bd = numpy.sign(bd) * max(abs(bd), self.min_price_diff)
+        return (a1 + ad, b1 + bd)
+
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class FakeSymbolRandom(FakeSymbol):
+    DEF_DRIFT, DEF_SPRC = 0, 0.0001
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, symbol_key: Tuple[str, str], a0: float, stdev: float,
+          drift: float = None, max_spread: float = None, ticks: int = None):
+        self.max_spread = max_spread if max_spread else a0 * self.DEF_SPRC
+        super().__init__(*symbol_key, [(a0, a0)], self.model, ticks)
+        self.stdev, self.drift = stdev, (drift if drift else 0.0)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def model(self, prices: ABList):
+        spread = numpy.random.uniform() * self.max_spread
+        diff = numpy.random.normal() * self.stdev + self.drift
+        diff = numpy.sign(diff) * max(abs(diff), self.min_price_diff)
+        ask = prices[-1][0] + diff
+        return (ask, ask - spread)
+    
+#███████████████████████████████████████████████████████████████████████████████████████████████
+#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+class FakeReader(DataReader):
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init__(self, fake_symbols: list[FakeSymbol], timeframes: Set[str],
+          time_since: Timestamp, time_until: Timestamp, ticks: int = None):
+        
+        symbols = SymbolDict()
+        iters = list[Iterable[RowTuple]]()
+        gen_args = (timeframes, time_since, time_until)
+        for symbol in fake_symbols:
+            if ticks: symbol.ticks = ticks
+            else: symbol.ticks = symbol.DEF_TICKS
+            symbol_key = (symbol.venue, symbol.symbol)
+            iters.append(self.gen(symbol, *gen_args))
+            symbols[symbol_key] = symbol
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def gen(self, symbol: FakeSymbol, timeframes: Set[str],
+          since: Timestamp = None, until: Timestamp = None):
+
+        ms = Timedelta(milliseconds = 1)
+        symbol_key = (symbol.venue, symbol.symbol)
+        if since is None: since = Timestamp.now(tz = TZ).floor("D")
+        if until is None: until = since + ms * symbol.DEF_TICKS
+        dft = DataFrame(symbol, columns = ["pa", "pb"])
+        time_step = (until - since) / (dft.shape[0] - 1)
+        dft.index = (dft.index * time_step) + since
+        dft = dft.rename_axis("time_event")
+        dfc: dict[TimeFrame, Series[dict]] = dict()
+        tf: TimeFrame = None
+        
+        for tfs in timeframes:
+            if tfs not in TimeFrame: continue
+            else: tf = TimeFrame[tfs]
+            group = dft.resample(tf.value)
+            dfa, dfb = group["pa"].ohlc(), group["pb"].ohlc()
+            dfa.columns, dfb.columns = list("ohlc"), list("ohlc")
+            df = DataFrame.merge(dfa, dfb, suffixes = list("ab"),
+              how = "outer", left_index = True, right_index = True)
+            df["volume"], df["time"] = group["pa"].count(), df.index
+            df = df.apply(dict, axis = "columns")
+            df.index = df.index + tf.value
+            dfc[tf] = df
+
+        dft["tf"] = None
+        index = ["tf", "time_event"]
+        dfc: Series = concat(dfc, names = index)
+        dft = dft.reset_index().set_index(index)
+        dft = dft.apply(dict, axis = "columns")
+        if "T1" in timeframes: dfc = concat((dfc, dft))
+        dfc: Series[dict] = dfc.swaplevel().sort_index()
+
+        for (tf, time_event), payload in dfc.items():
+            time_us = int(Timestamp.timestamp(time_event) * 1e6)
+            if not tf: yield (Tick, time_us, *symbol_key, *payload.values())
+            else: yield (Candle, time_us, *symbol_key, tf.name, *payload.values())
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
