@@ -414,9 +414,9 @@ class FakeSymbolRandom(FakeSymbol):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, symbol_key: Tuple[str, str], a0: float, stdev: float,
           drift: float = None, max_spread: float = None, ticks: int = None):
+        self.stdev, self.drift = stdev, (drift if drift else self.DEF_DRIFT)
         self.max_spread = max_spread if max_spread else a0 * self.DEF_SPRC
         super().__init__(*symbol_key, [(a0, a0)], self.model, ticks)
-        self.stdev, self.drift = stdev, (drift if drift else 0.0)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def model(self, prices: ABList):
         spread = numpy.random.uniform() * self.max_spread
