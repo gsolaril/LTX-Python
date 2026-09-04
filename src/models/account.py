@@ -1,18 +1,22 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+from __future__ import annotations
+
 import os, sys, asyncio
 from sympy import divisors
-from typing import ClassVar, Callable
+from typing import TYPE_CHECKING, ClassVar, Callable
 from typing import Any, List, Dict, Tuple
 from collections import defaultdict, OrderedDict
 from dataclasses import dataclass, field, Field
 from enum import Enum, EnumMeta, IntEnum
 from pandas import Timestamp, Timedelta
-from .order import OrderCreate, Reject
-from .order import OrderModify, OrderDelete
-from .order import Order, OrderDict
-from .order import Trade, TradeDict
+if TYPE_CHECKING:
+    from .order import OrderCreate, Reject
+    from .order import OrderModify, OrderDelete
+    from .order import Order, OrderDict
+    from .order import Trade, TradeDict
 from .data import BasePoint, Quote
 from .misc import DBClass
+from .order import Order, Reject, Trade
 from src.utils import Redis, TZ
 
 STREAMABLES = list[type]()
@@ -32,8 +36,8 @@ class AccountState(BasePoint, DBClass):
     leverage: float = field(kw_only = True, default = 1.0)
     uPNL: float = field(kw_only = True, default = None)
     rPNL: float = field(kw_only = True, default = None)
-    gav: float = field(kw_only = True, default = None)
-    nav: float = field(kw_only = True, default = None)
+    GAV: float = field(kw_only = True, default = None)
+    NAV: float = field(kw_only = True, default = None)
     time: Timestamp = field(kw_only = True, default = None)
     STREAM_MIDFIX: ClassVar[str] = "ACC"
     STREAM_KEY: ClassVar[list[str]] = ["{venue}", "{id}", "STATE"]
@@ -48,8 +52,8 @@ class AccountState(BasePoint, DBClass):
         if (self.time is None): self.time = Timestamp.now(TZ)
         if (self.uPNL is None): self.uPNL = 0
         if (self.rPNL is None): self.rPNL = 0
-        if (self.gav is None): self.gav = 0
-        if (self.nav is None): self.nav = 0
+        if (self.GAV is None): self.GAV = 0
+        if (self.NAV is None): self.NAV = 0
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __setattr__(self, name: str, value: Any):
         super().__setattr__(name, value)
@@ -62,7 +66,7 @@ class AccountState(BasePoint, DBClass):
     def __ne__(self, other: "Account"): return (self.id != other.id)
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def margin(self): return abs(self.nav) / self.leverage
+    def margin(self): return abs(self.NAV) / self.leverage
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def equity(self): return self.balance + self.uPNL
@@ -75,7 +79,7 @@ class AccountState(BasePoint, DBClass):
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def payload(self): return {"balance": self.balance, "equity": self.equity,
-      "margin": self.margin, "gav": self.gav, "nav": self.nav, "uPNL": self.uPNL,
+      "margin": self.margin, "GAV": self.GAV, "NAV": self.NAV, "uPNL": self.uPNL,
       "rPNL": self.rPNL, "uPRC": self.uPRC, "mPRC": self.mPRC}
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -109,10 +113,13 @@ class Rules:
 @streamable#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class Account(AccountState):
     is_hedging: bool = field(default = False)
-    orders_active: OrderDict = field(kw_only = True, init = True, default = dict())
-    trades_active: TradeDict = field(kw_only = True, init = True, default = dict())
-    orders_closed: OrderDict = field(kw_only = True, init = True, default = dict())
-    trades_closed: TradeDict = field(kw_only = True, init = True, default = dict())
+    orders_active: OrderDict = field(kw_only = True, init = True, default_factory = dict)
+    trades_active: TradeDict = field(kw_only = True, init = True, default_factory = dict)
+    orders_closed: OrderDict = field(kw_only = True, init = True, default_factory = dict)
+    trades_closed: TradeDict = field(kw_only = True, init = True, default_factory = dict)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __post_init__(self):
+        super().__post_init__(); self.reconcile()
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def payload(self): return {**super().payload,
@@ -123,9 +130,12 @@ class Account(AccountState):
             rules: Rules = None, quote: Quote = None):
 
         max_margin = self.equity * rules.max_mPRC
-        margin_req = request.asset_value / self.leverage
+        if (request.price is None):
+            price = quote.mkt_price(request.side == request.Side.SELL)
+        else: price = request.price
+        margin_req = abs(price * request.base_units) / self.leverage
         margin_future = self.margin + margin_req
-        mPRC_future = self.equity / abs(margin_future)
+        mPRC_future = margin_future / self.equity
         if (mPRC_future <= rules.max_mPRC): return None
         return Reject.from_request(request = request,
             reason = Reject.Reason.MAX_MARGIN, quote = quote,
@@ -134,13 +144,14 @@ class Account(AccountState):
     def check_num_orders(self, request: OrderCreate,
             rules: Rules = None, quote: Quote = None):
 
-        if (self.order_count <= rules.max_orders): return None
+        if (self.order_count < rules.max_orders): return None
         return Reject.from_request(request = request, 
             reason = Reject.Reason.MAX_ORDERS, quote = quote,
             current = self.order_count, max_allowed = rules.max_orders)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def check_freq_orders(self, request: OrderCreate,
             rules: Rules = None, quote: Quote = None):
+        if (rules.max_freq_us is None): return None
         since_last = quote.time_event - self.time
         since_last_us = 1e6 * since_last.total_seconds()
         if (since_last_us <= rules.max_freq_us): return None
@@ -170,42 +181,46 @@ class Account(AccountState):
             if (trade is not None):
                 trade.check_hedged(filled)
                 if (trade.status == Trade.Status.HEDGED):
+                    trade.price = quote.mkt_price(
+                        trade.side.flip == trade.Side.SELL)
                     self.on_trade_closed(trade, rules, quote)
                     return None
             else:
                 trades_symbol["NETTING"] = filled
                 self.trade_count = self.trade_count + 1
-                    
+        self.reconcile()
         return filled
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_trade_closed(self, trade: Trade, rules: Rules = None, quote: Quote = None):
         symbol_key = (trade.symbol.venue, trade.symbol.symbol)
         self.uPNL = self.uPNL - trade.pnl
-        self.nav = self.nav - trade.asset_value
-        self.gav = self.gav - abs(trade.asset_value)
-        if not trade.check_closed(quote):
+        self.NAV = self.NAV - trade.asset_value
+        self.GAV = self.GAV - abs(trade.asset_value)
+        is_terminal = (trade.status in Trade.CLOSED_STATES)
+        if (not is_terminal) and (not trade.check_closed(quote)):
             self.uPNL = self.uPNL + trade.pnl
-            self.nav = self.nav + trade.asset_value
-            self.gav = self.gav + abs(trade.asset_value)
+            self.NAV = self.NAV + trade.asset_value
+            self.GAV = self.GAV + abs(trade.asset_value)
             return None
 
         trade.status = Trade.Status.CLOSED
         trades_symbol = self.trades_active[symbol_key]
         self.trades_closed[symbol_key][trade.UID] = trade
-        trades_symbol.pop(trade.UID)
-        if self.is_hedging:
-            trades_symbol.pop(trade.UID)
+        if self.is_hedging: trades_symbol.pop(trade.UID)
         else: trades_symbol["NETTING"] = None
         self.trade_count = self.trade_count - 1
         self.balance = self.balance + trade.pnl
         self.rPNL = self.rPNL + trade.pnl
+        self.reconcile()
         return trade
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_order_create(self, request: OrderCreate,
           rules: Rules = None, quote: Quote = None):
-                          
+
+        if (request.time < self.time): return None
+
         if (rules is not None):
             reject = self.check_margin(request, rules, quote)
             if (reject is not None): return reject
@@ -231,7 +246,7 @@ class Account(AccountState):
         elif (request.UID in trades_active): return trades_active[request.UID]
         elif not self.is_hedging:
             trade: Trade = trades_active["NETTING"]
-            if (trade.UID == request.UID): return trade
+            if (trade is not None) and (trade.UID == request.UID): return trade
         return Reject.from_request(request = request, 
             quote = quote, reason = Reject.Reason.UNKNOWN_UID)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -244,17 +259,36 @@ class Account(AccountState):
         obj: Order | Trade = self.check_order_exists(request, quote)
         if isinstance(obj, Reject): return obj
         symbol_key = (obj.symbol.venue, obj.symbol.symbol)
-        obj.on_delete(request)
+        if isinstance(obj, Trade):
+            obj.on_delete(request)
+            obj.price = quote.mkt_price(obj.side.flip == obj.Side.SELL)
+            return self.on_trade_closed(obj, None, quote)
         if isinstance(obj, Order):
+            obj.on_delete(request)
             self.orders_active[symbol_key].pop(obj.UID)
             self.orders_closed[symbol_key][obj.UID] = obj
             self.order_count = self.order_count - 1
-        elif isinstance(obj, Trade):
-            if self.is_hedging:
-                self.trades_active[symbol_key].pop(obj.UID)
-            else: self.trades_active["NETTING"] = None
-            self.trades_closed[symbol_key][obj.UID] = obj
+            self.reconcile()
         return obj
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def reconcile(self):
+        rPNL = uPNL = GAV = NAV = 0
+        order_count, trade_count = 0, 0
+        for orders in self.orders_active.values():
+            order_count = order_count + len(orders)
+        for trades in self.trades_closed.values():
+            for trade in trades.values():
+                rPNL += trade.pnl
+        for trades in self.trades_active.values():
+            for trade in trades.values():
+                if (trade is None): continue
+                trade_count = trade_count + 1
+                uPNL += trade.pnl
+                NAV += trade.asset_value
+                GAV += abs(trade.asset_value)
+        self.rPNL, self.uPNL = rPNL, uPNL
+        self.GAV, self.NAV = GAV, NAV
+        self.order_count, self.trade_count = order_count, trade_count
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

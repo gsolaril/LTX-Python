@@ -19,6 +19,7 @@ dependencies = [
     "pandas",
     "polymarket-client==0.1.0b2",
     "py-clob-client",
+    "pymongo",
     "redis",
     "sortedcontainers",
     "tqdm",

@@ -13,7 +13,7 @@ from src.models import SymbolDict, TimeFrame
 from src.models import StreamingAgent
 from src.models import LOG_RESPONSES
 from src.utils import b64, Log, Redis, TZ, _FOLDER_LOG
-from .datareader import FileReader, TSDBReader
+from .datareader import FileReader, TSDBReader, FakeReader
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -21,10 +21,10 @@ from .datareader import FileReader, TSDBReader
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class Simulator(StreamingAgent):
     id: str = field(init = True, default = None)
-    accounts: AccountDict = field(init = True)
+    accounts: AccountDict = field(init = True, default = None)
+    symbols: SymbolDict = field(init = True, default = None)
+    timeframes: Set[str] = field(init = True, default = None)
     rules: Rules = field(init = True, default = None)
-    symbols: SymbolDict = field(init = True)
-    timeframes: Set[str] = field(init = True)
     time_since: Timestamp = field(init = True, default = None)
     time_until: Timestamp = field(init = True, default = None)
     reader_mode: str = field(init = True, default = "tsdb")
@@ -45,15 +45,25 @@ class Simulator(StreamingAgent):
         if (self.id is None):
             self.id = b64()
             Log.warning(self.VERBOSE_NO_BTID.format(id = self.id))
+        self.time = Timestamp.now(TZ)
         self.stream_prefix = self.STREAM_PREFIX + self.id
         if (self.accounts is None): self.accounts = {self.id: Account(
             id = self.id, time = self.time, venue = self.STREAM_PREFIX,
             balance = self.DEFAULT_BALANCE, leverage = self.DEFAULT_LEVERAGE)}
         self._timeframes = set()
         self._tick_driven = False
+        self.orders = dict[str, Order]()
+        self.trades = dict[str, Trade]()
+        self.quotes: QuoteDict = {}
         for tf in self.timeframes:
             if (tf == "T1"): self._tick_driven = True
             else: self._timeframes.add(TimeFrame[tf])
+        for account in self.accounts.values():
+            for symbol_key in self.symbols:
+                account.orders_active.setdefault(symbol_key, dict())
+                account.trades_active.setdefault(symbol_key, dict())
+                if not account.is_hedging:
+                    account.trades_active.setdefault("NETTING", None)
         self._min_tf: TimeFrame = min(self._timeframes)
         self.callbacks: dict[Order.Action, Callable] = {
             Order.Action.CREATE: self.order_create,
@@ -71,6 +81,7 @@ class Simulator(StreamingAgent):
             "time_since": self.time_since, "time_until": self.time_until}
         if (self.reader_mode == "FILE"): self.reader = FileReader(**args)
         elif (self.reader_mode == "TSDB"): self.reader = TSDBReader(**args)
+        elif (self.reader_mode == "FAKE"): self.reader = FakeReader(**args)
         else: raise ValueError(f"Wrong reader mode: \"{self.reader_mode}\"")
         self._release_quote = asyncio.Event()
         super().__post_init__()
@@ -127,11 +138,14 @@ class Simulator(StreamingAgent):
         responses = list[Order | Trade | Reject]()
         prefix, source, stream = stream.split(Redis.SEP, maxsplit = 3)
         payload["time"] = Redis.id_to_timestamp(mid)
-        if (prefix != self.stream_prefix): return Log.error(
-            self.VERBOSE_WRONG_BTID.format(prefix, self.stream_prefix))
+        if (prefix != self.stream_prefix):
+            Log.error(self.VERBOSE_WRONG_BTID.format(prefix, self.stream_prefix))
+            return
         if (source == "HAND") and self.wait_response:
             mid = payload.pop("hsid", "NO_HSID")
-            if (mid == self.hsid): return self._release_quote.set()
+            if (mid == self.hsid):
+                self._release_quote.set()
+                return
             Log.error(self.VERBOSE_UNPHASED.format(mid, self.hsid))
             return
         if (source == "EXEC"):
@@ -187,7 +201,7 @@ class Simulator(StreamingAgent):
         message: str = reason.value.format(
             subject = subject, summary = "#" + UID)
         return Reject(account = account, time = self.time,
-                UID = UID, reason = reason, message = message)
+              UID = UID, reason = reason, message = message)
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def order_modify(self, account_key: Tuple[str, str], **payload):
@@ -215,6 +229,7 @@ class Simulator(StreamingAgent):
     @Redis.stream#█▄▄▄▄▄▄▄▄▄
     async def datafeed(self):
         last_time_us: int = 0
+        item: Tick | Candle = None
         queue = deque[Tick | Candle]()
         async for item in self.reader:
             self.time = item.time_event
@@ -296,6 +311,7 @@ class Simulator(StreamingAgent):
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def finish(self):
+        account: Account = None
         df_orders = dict[str, dict]()
         df_trades = dict[str, dict]()
         for account in self.accounts.values():

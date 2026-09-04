@@ -1,11 +1,14 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+from __future__ import annotations
+
 from numpy import inf as INF, sign
 from enum import IntEnum, StrEnum
-from typing import Tuple, Set, List
+from typing import TYPE_CHECKING, Tuple, Set, List
 from typing import ClassVar, Callable
 from dataclasses import asdict, dataclass, field
 from pandas import Timestamp, Timedelta
-from .account import Account
+if TYPE_CHECKING:
+    from .account import Account
 from .data import Quote
 from .misc import Symbol
 from src.utils import Log, Redis, TZ, b64
@@ -13,10 +16,13 @@ from src.utils import Log, Redis, TZ, b64
 STREAMABLES = list[type]()
 LOG_RESPONSES = dict[type, Callable]()
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-def streamable(cls: type):
-    LOG_RESPONSES[cls] = cls.logger
-    STREAMABLES.append(cls)
-    return dataclass(cls)
+def streamable(cls: type = None, **kwargs):
+    def decorator(inner_cls: type):
+        LOG_RESPONSES[inner_cls] = inner_cls.logger
+        STREAMABLES.append(inner_cls)
+        return dataclass(inner_cls, **kwargs)
+    if cls is None: return decorator
+    return decorator(cls)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -28,7 +34,7 @@ class Message:
     UID: str = field(kw_only = True, default = None, init = False)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class Action(IntEnum): CREATE, MODIFY, DELETE, REJECT, ORDERS, TRADES = range(6)
-    ACTION: ClassVar[Action] = ...
+    ACTION: ClassVar[Action] = Action.ORDERS
     STREAM_MIDFIX: ClassVar[str] = "EXEC"
     VERBOSE_REPR: ClassVar[str] = "#{UID}"
     DT_FORMAT: ClassVar[str] = "%Y/%m/%d %X.%f"
@@ -71,9 +77,13 @@ class Message:
         # TODO: NAME OF THE PLACING CHANNEL HERE BELOW
         cls.VERBOSE_REPR = f"{cls.__name__}({cls.VERBOSE_REPR})"
         if ("ACTION" in cls.__dict__): return
-        cls.ACTION = Message.Action[cls.__name__.replace("Order", "").upper()]
+        if (cls.__name__ == "Message"): return
+        action_name = cls.__name__.replace("Order", "").upper()
+        if action_name not in Message.Action.__members__:
+            return
+        cls.ACTION = Message.Action[action_name]
         stream_key = [cls.STREAM_MIDFIX, *cls.STREAM_KEY, cls.ACTION.name]
-        cls.stream_key = Redis.join(stream_key).format
+        cls.stream_key = Redis.join(*stream_key).format
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -98,8 +108,8 @@ class Reject(Message):
         MAX_ORDERS = "{subject!r} ({summary}) rejected due to max number of orders. Current: {current}. Max allowed: {max_allowed}"
         MAX_FREQ = "{subject!r} ({summary}) over frequency limit. Since last: {current:.0f}us. Min allowed: {min_allowed:.0f}"
         UNKNOWN = "{subject!r} ({summary}) rejected due to unknown reason."
-    reason: str = field(kw_only = True, init = False)
-    message: str = field(kw_only = True, init = False)
+    reason: str = field(kw_only = True)
+    message: str = field(kw_only = True)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
@@ -112,10 +122,21 @@ class Reject(Message):
     def from_request(cls, reason: Reason, request: Message, quote: Quote = None, **kwargs):
         subject = request.__class__.__name__.split(".")[-1]
         curr_time = None if (quote is None) else quote.time_event
-        message = reason.value.format(subject = subject, **request.__dict__,
-            summary = request.summary, curr_time = curr_time, **kwargs)
-        return cls(account = request.account, time = curr_time,
-            UID = request.UID, reason = reason.name, message = message)
+        values = {name: getattr(request, name)
+            for name in request.__dataclass_fields__}
+        if (quote is not None):
+            values.setdefault("curr_price", quote.mkt_price(
+                request.side == request.Side.SELL))
+        if hasattr(request, "symbol"):
+            values.setdefault("min_order_size", request.symbol.min_order_size)
+        values.update(kwargs)
+        message = reason.value.format(subject = subject, **values,
+            summary = request.summary, curr_time = curr_time)
+        response = cls(account = request.account,
+            reason = reason.name, message = message)
+        response.time = curr_time
+        response.UID = request.UID
+        return response
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def summary(self): return self.__str__()
@@ -168,7 +189,7 @@ class OrderMessage(Message):
         if not stop_price: return True
         stop_price = float(stop_price)
         sign_entry = direction * self.side.value
-        sign_curr = sign_entry * self.type.value
+        sign_curr = sign_entry * (self.type.value or 1)
         curr_price = quote.mkt_price(self.side == self.Side.SELL)
         min_price_diff = quote.symbol.min_price_diff
         if (self.type != self.Type.MARKET):
@@ -198,7 +219,7 @@ class OrderCreate(OrderMessage):
     symbol: Symbol = field(kw_only = True)
     comment: str = field(kw_only = True, default = None)
     MAX_COMMENT: ClassVar[int] = 64
-    VERBOSE_REPR: ClassVar[str] = "#{UID}: {side} {size} \"{symbol!r}\" @ {price:.5f}"
+    VERBOSE_REPR: ClassVar[str] = "#{UID}: {side} {size} \"{symbol!r}\" @ {price}"
     logger: ClassVar[Callable] = Log.info
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
@@ -219,13 +240,15 @@ class OrderCreate(OrderMessage):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def reject(self, quote: Quote = None):
         if not self.check_size(): return Reject.from_request(
-            request = self, quote = quote, reason = Reject.Reason.WRONG_SIZE)
+            request = self, quote = quote, reason = Reject.Reason.WRONG_SIZE,
+            min_order_size = self.symbol.min_order_size)
         if not self.check_comment(): self.comment = self.comment[: self.MAX_COMMENT]
         return super().reject(quote = quote)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __str__(self): return self.VERBOSE_REPR.format(UID = self.UID,
-      symbol = self.symbol, size = abs(self.size), price = self.price, 
-      side = self.side.name)
+        symbol = self.symbol, size = abs(self.size),
+        price = "MARKET" if self.price is None else f"{self.price:.5f}",
+        side = self.side.name)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __repr__(self): return self.__str__()
 
@@ -241,13 +264,13 @@ class OrderCreate(OrderMessage):
         str_time = self.time.strftime(self.DT_FORMAT)
         summary = f"{self.__str__()[: -1]} | {str_time}"
         if (self.expiration is None): exp_in = INF
-        else: exp_in = self.expiration - self.time
-        return f"{summary}, E+{exp_in.total_seconds():.1f}s)"
+        else: exp_in = (self.expiration - self.time).total_seconds()
+        return f"{summary}, E+{exp_in:.1f}s)"
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-@streamable(frozen = True)
+#▄▄▄▄▄▄▄▄▄▄▄▄
+@streamable#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class OrderModify(OrderMessage):
     logger: ClassVar[Callable] = Log.info
     #▄▄▄▄▄▄▄▄▄▄
@@ -256,8 +279,8 @@ class OrderModify(OrderMessage):
     def __repr__(self): return self.summary
     def __str__(self): return self.summary
 
-#▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-@streamable(frozen = True)
+#▄▄▄▄▄▄▄▄▄▄▄▄
+@streamable#█▄▄▄▄▄▄▄▄▄▄▄▄▄
 class OrderDelete(Message):
     logger: ClassVar[Callable] = Log.info
     #▄▄▄▄▄▄▄▄▄▄
@@ -280,8 +303,8 @@ class Order(OrderCreate):
     status: Status = field(kw_only = True, init = True, default = Status.PLACED)
     time_order: Timestamp = field(kw_only = True, init = True, default = None)
     ALLOW_REMOVAL: ClassVar[Set[str]] = {"price_sl", "price_tp", "expiration"}
-    VERBOSE_REPR: ClassVar[str] = "#{UID}({EID}): {side} {size} \"{symbol!r}\" @ {price:.5f}"
-    ACTION: ClassVar[Message.ACTION] = Message.ACTION.ORDERS
+    VERBOSE_REPR: ClassVar[str] = "#{UID}({EID}): {side} {size} \"{symbol!r}\" @ {price}"
+    ACTION: ClassVar[Message.Action] = Message.Action.ORDERS
     STREAM_MIDFIX: ClassVar[str] = "ACC"
     logger: ClassVar[Callable] = Log.success
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -289,9 +312,15 @@ class Order(OrderCreate):
     def from_request(cls, request: OrderCreate, quote: Quote = None):
         reject: Reject = request.reject(quote = quote)
         if (reject is not None): return reject
-        return cls(time = quote.time_event, time_order = request.time,
-            account = request.account, status = Order.Status.PLACED,
-            UID = request.UID, **request.payload)
+        payload = {
+            "price": request.price, "price_sl": request.price_sl,
+            "price_tp": request.price_tp, "expiration": request.expiration,
+            "mode": request.mode, "size": request.size,
+            "symbol": request.symbol, "comment": request.comment}
+        order = cls(time_order = request.time, account = request.account,
+            status = Order.Status.PLACED, UID = request.UID, **payload)
+        order.time = quote.time_event
+        return order
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         super().__post_init__()
@@ -299,8 +328,9 @@ class Order(OrderCreate):
             self.EID = self.UID
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __str__(self): return self.VERBOSE_REPR.format(UID = self.UID,
-            EID = self.EID, price = self.price, side = self.side.name,
-            symbol = self.symbol, size = abs(self.size))
+        EID = self.EID,
+        price = "MARKET" if self.price is None else f"{self.price:.5f}",
+        side = self.side.name, symbol = self.symbol, size = abs(self.size))
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __repr__(self): return self.__str__()
     #▄▄▄▄▄▄▄▄▄▄
@@ -339,31 +369,34 @@ class Order(OrderCreate):
         for field in list(to_modify):
             value_old = getattr(self, field)
             value_new = to_modify[field]
-            pop = (value_new is None)
-            pop &= (field in self.ALLOW_REMOVAL)
-            pop |= (value_new == value_old)
+            pop = (value_new == value_old)
+            pop |= (value_new is None) and (field not in self.ALLOW_REMOVAL)
             if pop: to_modify.pop(field)
 
         curr_time = None if (quote is None) else quote.time_event
-        modify = OrderModify(account = self.account, UID = self.UID,
-            time = curr_time, **to_modify)
+        modify = OrderModify(account = self.account, **to_modify)
+        modify.UID = self.UID
+        modify.time = curr_time
         if not to_modify: return Reject.from_request(quote = quote,
             reason = Reject.Reason.NO_MODIFY, request = modify)
-        reject: Reject = modify.reject(quote = quote)
-        if (reject is not None): return reject
+        modify._provided_fields = set(to_modify)
         return modify
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def delete(self, quote: Quote = None, **kwargs):
         curr_time = None if (quote is None) else quote.time_event
-        return OrderDelete(account = self.account, UID = self.UID,
-            time = curr_time)
+        delete = OrderDelete(account = self.account)
+        delete.UID = self.UID
+        delete.time = curr_time
+        return delete
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_modify(self, modify: OrderModify):
-        if modify.mode: self.mode = modify.mode
-        if modify.price: self.price = modify.price
-        if modify.price_sl: self.price_sl = modify.price_sl
-        if modify.price_tp: self.price_tp = modify.price_tp
-        if modify.expiration: self.expiration = modify.expiration
+        fields = getattr(modify, "_provided_fields", {
+            "mode", "price", "price_sl", "price_tp", "expiration"})
+        if "mode" in fields: self.mode = modify.mode
+        if "price" in fields: self.price = modify.price
+        if "price_sl" in fields: self.price_sl = modify.price_sl
+        if "price_tp" in fields: self.price_tp = modify.price_tp
+        if "expiration" in fields: self.expiration = modify.expiration
         self.time = modify.time
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_delete(self, delete: OrderDelete):
@@ -373,10 +406,10 @@ class Order(OrderCreate):
     def check_filled(self, quote: Quote):
         if (self.status == Order.Status.FILLED): return False
         elif (self.price is None): return True
-        curr_price = quote.mkt_price(self.side)
+        curr_price = quote.mkt_price(self.side == self.Side.SELL)
         direction = (- self.type.value) * self.side.value
         diff_entry = (curr_price - self.price) * direction
-        return (diff_entry > 0)
+        return (diff_entry >= 0)
     
 #███████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -385,23 +418,30 @@ class Order(OrderCreate):
 class Trade(Order):
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     class Status(StrEnum):
-        OPENED, HEDGED, CLOSED = "OPENED", "HEDGED", "CLOSED"
+        OPENED, HEDGER = "OPENED", "HEDGER"
+        HEDGED, CLOSED, SL, TP = "HEDGED", "CLOSED", "SL", "TP"
     status: Status = field(kw_only = True, default = Status.OPENED)
     time_trade: Timestamp = field(kw_only = True, default = None)
     price_trade: float = field(kw_only = True, default = None)
-    ACTION: ClassVar[Message.ACTION] = Message.ACTION.TRADES
+    CLOSED_STATES: ClassVar[set[Status]] = {
+        Status.HEDGED, Status.CLOSED, Status.SL, Status.TP}
+    ACTION: ClassVar[Message.Action] = Message.Action.TRADES
     logger: ClassVar[Callable] = Log.success
     #▄▄▄▄▄▄▄▄▄▄▄▄▄
     @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def from_order(cls, order: Order, quote: Quote = None):
         if (order.status != Order.Status.FILLED): return None
         if (order.price is not None): curr_price = order.price
-        elif (quote is not None): curr_price = quote.mkt_price(order.side)
+        elif (quote is not None):
+            curr_price = quote.mkt_price(order.side == order.Side.SELL)
         curr_time = quote.time_event if (quote is not None) else Timestamp.now(TZ)
-        return cls(account = order.account, UID = order.UID, EID = order.EID, time = curr_time,
-          size = order.size, price = curr_price, symbol = order.symbol, price_sl = order.price_sl,
-          price_tp = order.price_tp, expiration = order.expiration, time_order = order.time,
-          comment = order.comment, status = Trade.Status.OPENED)
+        trade = cls(account = order.account, UID = order.UID, EID = order.EID,
+            size = order.size, price = curr_price, symbol = order.symbol,
+            price_sl = order.price_sl, price_tp = order.price_tp,
+            expiration = order.expiration, time_order = order.time,
+            comment = order.comment, status = Trade.Status.OPENED)
+        trade.time = curr_time
+        return trade
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ 
     def __post_init__(self):
         super().__post_init__()
@@ -413,7 +453,7 @@ class Trade(Order):
     @property
     def pnl(self):
         diff_price = self.price - self.price_trade
-        return diff_price * self.size * self.side.value
+        return diff_price * self.base_units
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def check_hedged(self, trade: Trade):
         min_order_size = self.symbol.min_order_size
@@ -423,20 +463,23 @@ class Trade(Order):
         self.time = trade.time
         next_size = self.size + trade.size
         if (abs(next_size) <= min_order_size):
-            self.status = Trade.Status.CLOSED
+            self.size = next_size
+            self.status = Trade.Status.HEDGED
         elif (self.side == trade.side): self.increase_pos(trade)
         elif (self.side != trade.side): self.decrease_pos(trade)
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def increase_pos(self, trade: Trade):
         asset_value = self.asset_value + trade.asset_value
+        self.size = self.size + trade.size
         self.price_trade = asset_value / self.base_units
         if trade.price_sl: self.price_sl = trade.price_sl
         if trade.price_tp: self.price_tp = trade.price_tp
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def decrease_pos(self, trade: Trade):
         initial, hedging = self, trade
+        initial_size, hedging_size = abs(initial.size), abs(hedging.size)
         hedging.side = hedging.side.flip
-        hedging.status = Trade.Status.HEDGED
+        hedging.status = Trade.Status.HEDGER
         initial_price, hedging_price = initial.price_trade, hedging.price_trade
         initial_time_order, hedging_time_order = initial.time_order, hedging.time_order
         initial_time_trade, hedging_time_trade = initial.time_trade, hedging.time_trade
@@ -446,8 +489,9 @@ class Trade(Order):
         hedging.time_order = initial_time_order
         initial.size = initial.size - hedging.size
         if (sign(initial.size) != initial.side.value):
-            initial.UID, hedging.UID = hedging.UID, initial.UID
-            initial.EID, hedging.EID = hedging.EID, initial.EID
+            initial.size = -initial.side.value * (hedging_size - initial_size)
+            initial.UID, hedging.UID = hedging.UID, initial.UID # FIXME: WHY?
+            initial.EID, hedging.EID = hedging.EID, initial.EID # FIXME: WHY?
             initial.time_order = hedging_time_order
             initial.time_trade = hedging_time_trade
             initial.price_trade = hedging_price
@@ -456,17 +500,18 @@ class Trade(Order):
             initial.side = initial.side.flip
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_modify(self, modify: OrderModify):
-        if (self.status == Trade.Status.CLOSED): return
-        if modify.price_sl: self.price_sl = modify.price_sl
-        if modify.price_tp: self.price_tp = modify.price_tp
+        if (self.status in Trade.CLOSED_STATES): return
+        fields = getattr(modify, "_provided_fields", {"price_sl", "price_tp"})
+        if "price_sl" in fields: self.price_sl = modify.price_sl
+        if "price_tp" in fields: self.price_tp = modify.price_tp
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def on_delete(self, delete: OrderDelete):
         self.status = Trade.Status.CLOSED
         self.time = delete.time
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def check_closed(self, quote: Quote = None):
-        if (self.status == Trade.Status.CLOSED): return False # TODO: double check this
-        elif (self.status == Trade.Status.HEDGED): return True
+        if (self.status in Trade.CLOSED_STATES): return False
+        elif (self.status == Trade.Status.HEDGER): return True
         elif (abs(self.size) < self.symbol.min_order_size):
             self.status = Trade.Status.CLOSED; return True
         else: return self.on_close(quote)
@@ -475,17 +520,19 @@ class Trade(Order):
         self.time = quote.time_event
         bid = (self.side.flip == self.Side.SELL)
         self.price = quote.mkt_price(bid, ranged = True)
-        if not self.price_sl or not self.price_tp: return False
-        diff_sl = (self.price - self.price_sl) * self.side.value
-        diff_tp = (self.price - self.price_tp) * self.side.value
-        if (diff_sl >= 0): # Touched SL
-            self.price = self.price_sl
-            self.status = Trade.Status.CLOSED
-            return True
-        if (diff_tp >= 0): # Touched TP
-            self.price = self.price_tp
-            self.status = Trade.Status.CLOSED
-            return True
+        if not self.price_sl and not self.price_tp: return False
+        if self.price_sl:
+            diff_sl = (self.price - self.price_sl) * self.side.value
+            if (diff_sl <= 0): # Touched SL
+                self.price = self.price_sl
+                self.status = Trade.Status.SL
+                return True
+        if self.price_tp:
+            diff_tp = (self.price - self.price_tp) * self.side.value
+            if (diff_tp >= 0): # Touched TP
+                self.price = self.price_tp
+                self.status = Trade.Status.TP
+                return True
         else: return False
 
 #███████████████████████████████████████████████████████████████████████████████████████████████

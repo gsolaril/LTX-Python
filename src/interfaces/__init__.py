@@ -1,15 +1,15 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-from .simulator import DataProvider, ExecReceiver, Simulator
+from .simulator import Simulator
 from .simulator import agents as agents_simulator
-from .simulator import tests as tests_simulator
+from .simulator.datareader import TestFileReader
 
 agents = {
     **agents_simulator,
 }
 tests = {
-    **tests_simulator,
+    "simulator/filereader": TestFileReader,
 }
-__all__ = ["DataProvider", "ExecReceiver", "Simulator", "agents", "tests"]
+__all__ = ["Simulator", "agents", "tests"]
 
 #███████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

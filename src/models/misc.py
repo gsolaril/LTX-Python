@@ -1,16 +1,20 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+from __future__ import annotations
+
 import os, sys, asyncio
 from sympy import divisors
-from typing import ClassVar, Callable
+from math import log10, exp
+from typing import TYPE_CHECKING, ClassVar, Callable
 from typing import Any, List, Dict, Tuple
 from collections import defaultdict, OrderedDict
 from dataclasses import dataclass, field, Field
 from enum import Enum, EnumMeta, IntEnum
 from pandas import Timestamp, Timedelta
-from .order import OrderCreate, Reject
-from .order import OrderModify, OrderDelete
-from .order import Order, Trade, OrderDict, TradeDict
-from .data import BasePoint, Quote, Tick, Candle
+if TYPE_CHECKING:
+    from .order import OrderCreate, Reject
+    from .order import OrderModify, OrderDelete
+    from .order import Order, Trade, OrderDict, TradeDict
+    from .data import BasePoint, Quote, Tick, Candle
 from src.utils import Log, TZ
 
 #███████████████████████████████████████████████████████████████████████████████████████████████
@@ -81,6 +85,7 @@ class Symbol(DBClass):
     expiration: Timestamp = field(kw_only = True, default = None)
     INDEX_KEYS: ClassVar[list[str]] = ["venue", "symbol"]
     TABLE: ClassVar[str] = "symbol_specs"
+    MIN_DIGITS: ClassVar[int] = 8
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         if self.quote is None: self.quote = "USD"
@@ -94,6 +99,17 @@ class Symbol(DBClass):
         if (self.venue != other.venue):
             return (self.venue < other.venue)
         return (self.symbol < other.symbol)
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @classmethod#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def naive_point(cls, price: float):
+        price_str = str(round(price, 12))
+        point_loc = price_str.index(".")
+        if (point_loc < 0):
+            decs = cls.MIN_DIGITS - int(log10(price))
+        else: decs = len(price_str) - point_loc - 1
+        return pow(0.1, decs)
+
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄
     def value_per_unit(self):

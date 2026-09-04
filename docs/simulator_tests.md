@@ -255,3 +255,14 @@ The following decisions refine the execution agreements above and should be trea
   - **[D]** Before margin validation and trade creation, use the current `Tick` or `Candle` quote to derive the effective execution price: ask for a buy and bid for a sell. The resulting price must drive the order's margin contribution, trade entry price, and subsequent PNL calculations.
 - **[C]** The test suite should be implemented incrementally while monitoring the production behavior exposed by each focused test module.
   - **[D]** Start with direct order creation and validation, then order conversion/fills, trade behavior, modification/deletion, and finally account lifecycle tests. Run the relevant unittest module after each implementation slice and record confirmed production fixes separately from test-only changes.
+
+#### **Position model clarification**
+
+- **[C]** The project uses `Trade` as its own name for the MT5-like position entity. Deal records are outside the current model and are not required for this testing strategy.
+  - **[D]** Treat `Trade` as the position object throughout the tests: it represents the currently exposed position, its entry/exit state, protective levels, PNL, and lifecycle identity.
+- **[C]** A non-hedging account (`account.is_hedging = False`) maintains one net position per symbol, and incoming same-symbol trades modify that position through netting and hedging logic.
+  - **[D]** Test net exposure as part of the account lifecycle in this mode. The active position must remain singular per symbol, with size, side, entry value, status, and UID/EID behavior asserted after each position-changing order.
+- **[C]** A hedging account (`account.is_hedging = True`) maintains independent positions, each represented by its own `Trade`, in the same way that independent orders are maintained.
+  - **[D]** Do not aggregate hedging-account trades into a net position inside `Account` or these unit tests. Test each position's lifecycle, identity, size, PNL, modification, and closure independently.
+- **[C]** Aggregate exposure for a hedging account may be useful, but it is not an intrinsic responsibility of the account's position book.
+  - **[D]** Leave hedging-account net exposure calculations to monitoring applications or future strategy components when that behavior is explicitly required.

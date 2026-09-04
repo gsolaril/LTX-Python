@@ -1,11 +1,14 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+from __future__ import annotations
+
 import asyncio
 from pandas import Timestamp
 from sortedcontainers import SortedDict
 from dataclasses import dataclass, field, asdict
-from typing import Any, Tuple, ClassVar, Callable
-from .misc import Symbol, TimeFrame
-from src.utils import Redis, TZ
+from typing import TYPE_CHECKING, Any, Tuple, ClassVar, Callable
+if TYPE_CHECKING:
+    from .misc import Symbol, TimeFrame
+from src.utils import Redis, TZ, b64
 
 STREAMABLES = list[type]()
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -38,14 +41,17 @@ class BasePoint:
         if (self.dus is not None): self.dus = int(self.dus)
         else: self.dus = int(delay_s * 1e6)
     #▄▄▄▄▄▄▄▄▄▄
-    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    def time_event(self): return self.time
-    #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def stream(self): return self.stream_key()
     #▄▄▄▄▄▄▄▄▄▄
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def time_event(self): return self.time
+    #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def time_us(self): return int(self.time_event.timestamp() * 1e6)
+    #▄▄▄▄▄▄▄▄▄▄
+    @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def time_b64(self): return b64(self.time_us)
     #▄▄▄▄▄▄▄▄▄▄
     @property#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __dict__(self): return {"stream": self.stream,
@@ -121,7 +127,7 @@ class Tick(Quote):
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def mkt_price(self, bid: bool, ranged: bool = False):
-        return self.pa if bid else self.pb
+        return self.pb if bid else self.pa
     
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __repr__(self):
@@ -177,7 +183,7 @@ class Candle(Quote):
     def time_event(self): return self._time_close
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def mkt_price(self, bid: bool, ranged: bool = False):
-        if ranged: return self.ha if bid else self.lb
+        if ranged: return self.lb if bid else self.ha
         return self.ca if bid else self.cb
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
