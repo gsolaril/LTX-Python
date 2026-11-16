@@ -1,6 +1,15 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-from .binance import Binance, DataBinanceUsdm, DataBinanceCoin, DataBinanceSpot
+import pathlib
+from .binance import DataBinanceUsdm, DataBinanceCoin, DataBinanceSpot
+from .polymarket import DataPolymarket
 
-__all__ = ["Binance", "DataBinanceUsdm", "DataBinanceCoin", "DataBinanceSpot"]
+__all__ = list[str]()
+
+folder = pathlib.Path(__file__).parent
+prefix = str.join("-", [folder.parent.stem, folder.stem, ""])
+
+classes = [DataBinanceUsdm, DataBinanceCoin, DataBinanceSpot, DataPolymarket]
+agents = {prefix + str.lower(getattr(cls, "VENUE")): cls for cls in classes}
+__all__.append("agents")
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 #███████████████████████████████████████████████████████████████████████████████████████████

@@ -9,13 +9,14 @@ from .base import TZ
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ 
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class Queue(asyncio.Queue):
+    MIN_CHECK = 3
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init__(self, maxsize: int, checkpoints: dict[float, Callable] = None):
         if not isinstance(checkpoints, dict): checkpoints = dict[float, Callable]()
         self._checkfunctions = [None, None]
         self._checkvalues = [0.0, 1.0]
         self.last_checkpoint = 0
-        self.last_checkpeek = 0
+        self.last_check = 0
         super().__init__(maxsize)
         self.size_1pct = maxsize // 100
         if (checkpoints is not None):
@@ -28,19 +29,21 @@ class Queue(asyncio.Queue):
     def get_nowait(self): item = super().get_nowait(); return item
     async def put(self, item: Any): await super().put(item); self._recheck()
     def put_nowait(self, item: Any): super().put_nowait(item); self._recheck()
+    def __len__(self): return self.qsize()
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def _recheck(self):
-        self.last_checkpeek += 1 
-        if (self.last_checkpeek >= self.size_1pct):
-            value = self.qsize() / self.maxsize
+        if (len(self) <= self.MIN_CHECK): return
+        self.last_check = self.last_check + 1
+        if (self.last_check >= self.size_1pct):
+            value = len(self) / self.maxsize
             index_next = self.last_checkpoint
             index_lower = self.last_checkpoint
             index_upper = self.last_checkpoint + 1
             value_lower = self._checkvalues[index_lower]
             value_upper = self._checkvalues[index_upper]
-            self.last_checkpeek = 0
             if (value_upper <= value): index_next += 1
             elif (value < value_lower): index_next -= 1
+            self.last_check = 0
             if (index_next != self.last_checkpoint):
                 func = self._checkfunctions[index_next]
                 if (func is not None): func(value)

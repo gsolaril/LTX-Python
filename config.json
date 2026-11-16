@@ -1,4 +1,5 @@
 {
+    "TEST": false,
     "LOG_TO_FILE": false,
     "LOG_TO_LDB": false
 }

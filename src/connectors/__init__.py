@@ -1,12 +1,9 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-from .fix import *
-from .rest import *
-from .ws import *
-connectors_agents = {
-    "connectors/binanceusdm": DataBinanceUsdm,
-    "connectors/binancecoin": DataBinanceCoin,
-    "connectors/binancespot": DataBinanceSpot
-}
-__all__ = ["connectors_agents"]
+from .data import agents as agents_data
+from .exec import agents as agents_exec
+from .venues import agents as agents_misc
+
+agents = {**agents_data, **agents_exec, **agents_misc}
+__all__ = ["agents"]
 #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-#███████████████████████████████████████████████████████████████████████████████████████████#▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+#███████████████████████████████████████████████████████████████████████████████████████████

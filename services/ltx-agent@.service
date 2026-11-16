@@ -1,5 +1,5 @@
 [Unit]
-Description=LTX data connector - Binance USDM
+Description=LTX agent - %I
 After=network-online.target
 Wants=network-online.target
 
@@ -8,7 +8,7 @@ Type=simple
 User=gaston
 Group=gaston
 WorkingDirectory=~
-ExecStart=/srv/shared/.venv/bin/ltx connectors/binanceusdm
+ExecStart=/srv/shared/.venv/bin/ltx %I
 Restart=on-failure
 RestartSec=5
 

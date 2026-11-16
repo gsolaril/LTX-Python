@@ -1,20 +1,23 @@
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-import asyncio, asyncpg, json
+import asyncio, json, datetime
+from asyncpg import Connection
 from collections import OrderedDict
 from typing import Any, ClassVar, Callable
 from dataclasses import dataclass, field
 from pandas import Timestamp, Timedelta
 from loguru import logger as Log
-from .misc import Symbol
+from .misc import Symbol, TimeFrame
+from .data import Quote, Balance
+from .order import Response
 from src.utils import Postgres, Redis, TZ
+
+STREAMABLE_TYPES = [Quote, Response, Balance]
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████
 #▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄
 class BaseAgent:
-    url: str = field(init = False, kw_only = True, default = None)
-    maxlen: int = field(init = False, kw_only = True, default = 10000)
     debug: bool = field(init = False, kw_only = True, default = False)
     active: bool = field(init = False, kw_only = True, default = False)
     last_written: Timestamp = field(init = False, kw_only = True, default = None)
@@ -25,9 +28,9 @@ class BaseAgent:
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __post_init__(self):
         self.name = self.__class__.__name__
-        self._specs = OrderedDict[str, Symbol]()
-        self._crons = dict[Callable, Timedelta]()
-        self._tasks = dict[str, asyncio.Task]()
+        self._tasks = dict[str, asyncio.Task]()    # All coroutines holding sync, async and client-related processes.
+        self._crons = dict[Callable, Timedelta]()  # Sync/Cron processes, that run at a given frequency; every N secs/mins/hs
+        self._procs = dict[str, Callable]()        # Async processes (e.g.: Channel methods) that work on the background.
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def start_cron(self, cron: Callable):
@@ -50,10 +53,16 @@ class BaseAgent:
     async def setup(self):
         self.active = True
         tasks = list[asyncio.Task]()
-        for cron in self._crons.keys():
-            name = f"{self.name}/cron/{cron.__name__}"
+        for cron, freq in self._crons.items():
+            try: tf = TimeFrame(freq).name
+            except: tf = f"S{freq: int}"
+            name = f"{self.name}/cron/{cron.__name__}/{tf}"
             tasks.append(asyncio.create_task(
                 self.start_cron(cron), name = name))
+        for name, process in self._procs.items():
+            process_name = f"{self.name}/{name}"
+            tasks.append(asyncio.create_task(
+              process(self), name = process_name))
         return tasks
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -74,10 +83,12 @@ class BaseAgent:
 
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def config_verbose(self):
-        verbose = f"Config for \"{self.name}\" updated:"
+        verbose = f"Config for \"{self.name}\" set as:"
         for field in self.__dataclass_fields__.keys():
             if field[0].isupper(): continue
             value = getattr(self, field)
+            if isinstance(value, datetime.datetime):
+                value = value.isoformat(" ")
             verbose += f"\n => \"{field}\": {value!r}"
         Log.info(verbose)
 
@@ -86,11 +97,24 @@ class BaseAgent:
 #▄▄▄▄▄▄▄▄▄▄▄
 @dataclass#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 class StreamingAgent(BaseAgent):
+    maxlen_redis: int = field(init = False, kw_only = True, default = 10000)
     freq_redis_report: int = field(init = False, kw_only = True, default = 600)
+    STREAM_FORMAT: ClassVar[dict[str, Any]] = dict.fromkeys(STREAMABLE_TYPES)
     STREAM_PREFIX: ClassVar[str] = ...
+    XGROUP: ClassVar[str] = ...
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if not hasattr(cls, "STREAM_PREFIX"): return
+        if (cls.STREAM_PREFIX is Ellipsis): return
+        for model in cls.STREAM_FORMAT.keys():
+            stream_key = getattr(model, "STREAM_KEY")
+            cls.STREAM_FORMAT[model] = cls.STREAM_PREFIX + Redis.SEP + stream_key
+
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     async def setup(self):
-        tasks =  list[asyncio.Task]()
+        tasks = list[asyncio.Task]()
         tasks.append(asyncio.create_task(Redis(self),
                 name = f"{self.name}/Manager/Redis"))
         await Redis.wait()
@@ -108,6 +132,14 @@ class ControllableAgent(StreamingAgent):
     FIELDS: ClassVar[list[str]] = ...
     FIELDS_STR: ClassVar[str] = ...
     FREQ_REPORT_DEFAULT: ClassVar[int] = 300
+    SYM_QUERY_BY: ClassVar[str] = "ALL"
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    def __post_init__(self):
+        super().__post_init__()
+        self._conn: Connection = None
+        self._specs: dict[str, Symbol] = dict()
+        self.sym_query: Callable = Symbol.QUERY_BY[self.SYM_QUERY_BY]
+    
     #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -125,25 +157,37 @@ class ControllableAgent(StreamingAgent):
         tasks.extend(await super().setup())
         return tasks
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def reconfig(self, conn: asyncpg.Connection):
-        await self.update_config(conn)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Redis.profiler#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def _reconfig_base(self, config: dict[str, Any]):
+        for key in self.FIELDS:
+            if not key in config: continue
+            setattr(self, key, config[key])
         if ("freq_redis_report" in self.FIELDS):
             freq = self.FREQ_REPORT_DEFAULT
             freq = getattr(self, "freq_redis_report", freq)
             self._crons[Redis.report] = Timedelta(seconds = freq)
 
-    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-    async def update_config(self, conn: asyncpg.Connection):
-        FIELDS, TABLE = self.FIELDS_STR, self.TABLE_CONFIG
-        query = f"SELECT {FIELDS} FROM {TABLE} WHERE (name = '{self.name}');"
-        row = await conn.fetchrow(query)
-        if row is None: return Log.error(
-            f"No config found for \"{self.name}\":\n => {query}")
-        config = dict[str, Any](row)
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Postgres.on_table_config(TABLE_CONFIG)#█▄▄▄▄▄▄▄▄
+    async def _reconfig(self, config: dict[str, Any]):
+        sources: set[str] = config.pop("sources", set())
+        await self._reconfig_base(config)
+        await self.reconfig(sources)
         self.last_updated = Timestamp.now(TZ)
-        for key, value in config.items():
-            if key.startswith("sources"):
-                sources = json.loads(value).items()
-                value = {S for S, V in sources if V}
-            setattr(self, key, value)
+        if hasattr(self, "sources"):
+            self.sources = sources
+        self.config_verbose()
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    @Redis.profiler#█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def update_specs(self, venue: str, symbols: set[str]):
+        query = f"SELECT * FROM {self.TABLE_SYMBOLS} WHERE (venue = '{venue}')"
+        if (self.sym_query is not None): query = query + self.sym_query(symbols)
+        if self.debug: Log.debug(f"Querying specs:\n => {query}")
+        result = [dict(row) for row in await self._conn.fetch(query)]
+        if not result: return Log.error(f"No specs found:\n => {query}")
+        for item in result: self._specs[item["symbol"]] = Symbol(**item)
+
+    #▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    async def reconfig(self, sources: set[str]): ...
